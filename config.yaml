@@ -1,0 +1,26 @@
+benchmark:
+  n_train: 50
+  n_test: 100
+  n_shots: 3
+  n_runs: 5
+  seed: 42
+models:
+  slms:
+  - HuggingFaceTB/SmolLM2-135M-Instruct
+  - HuggingFaceTB/SmolLM2-360M-Instruct
+  llm:
+    provider: openai
+    model: gpt-4o-mini
+anthropic:
+  api_key: YOUR_KEY_HERE
+openai:
+  api_key: YOUR_KEY_HERE
+qwen:
+  api_key: YOUR_KEY_HERE
+google:
+  api_key: YOUR_KEY_HERE
+cache:
+  enabled: true
+  dir: cache/
+output:
+  dir: results/
