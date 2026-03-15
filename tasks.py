@@ -52,7 +52,10 @@ BENCHMARK_REGISTRY: dict[str, dict] = {
 def load_boolq_task(n_train: int = 50, n_test: int = 100, seed: int = 42) -> Task:
     from datasets import load_dataset
 
-    ds = load_dataset("google/boolq")
+    try:
+        ds = load_dataset("google/boolq")
+    except Exception as e:
+        raise RuntimeError(f"Failed to load BoolQ dataset. Check your internet connection. Error: {e}") from e
     rng = random.Random(seed)
 
     train_idx = rng.sample(range(len(ds["train"])), min(n_train, len(ds["train"])))
@@ -91,7 +94,10 @@ def load_boolq_task(n_train: int = 50, n_test: int = 100, seed: int = 42) -> Tas
 def load_sst2_task(n_train: int = 50, n_test: int = 100, seed: int = 42) -> Task:
     from datasets import load_dataset
 
-    ds = load_dataset("stanfordnlp/sst2")
+    try:
+        ds = load_dataset("stanfordnlp/sst2")
+    except Exception as e:
+        raise RuntimeError(f"Failed to load SST-2 dataset. Check your internet connection. Error: {e}") from e
     rng = random.Random(seed)
     label_map = {0: "negative", 1: "positive"}
 
@@ -131,7 +137,10 @@ def load_sst2_task(n_train: int = 50, n_test: int = 100, seed: int = 42) -> Task
 def load_agnews_task(n_train: int = 50, n_test: int = 100, seed: int = 42) -> Task:
     from datasets import load_dataset
 
-    ds = load_dataset("fancyzhx/ag_news")
+    try:
+        ds = load_dataset("fancyzhx/ag_news")
+    except Exception as e:
+        raise RuntimeError(f"Failed to load AG News dataset. Check your internet connection. Error: {e}") from e
     rng = random.Random(seed)
     label_map = {0: "World", 1: "Sports", 2: "Business", 3: "Sci/Tech"}
 

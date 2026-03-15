@@ -37,7 +37,8 @@ class RandomSelector:
             List of k BoolQExample instances.
         """
         rng = random.Random(seed)
-        return rng.sample(train_pool, k)
+        k = min(k, len(train_pool))
+        return rng.sample(train_pool, k) if k > 0 else []
 
 
 class _BaseLLMSelector:
@@ -116,7 +117,8 @@ class _BaseLLMSelector:
 
         print("  [LLM selector] All retries exhausted. Falling back to random.")
         rng = random.Random(seed)
-        return rng.sample(train_pool, k)
+        k = min(k, len(train_pool))
+        return rng.sample(train_pool, k) if k > 0 else []
 
 
 class AnthropicSelector(_BaseLLMSelector):
@@ -355,4 +357,5 @@ class GenericLLMSelector:
                 time.sleep(delay)
 
         rng = random.Random(seed)
-        return rng.sample(train_pool, k)
+        k = min(k, len(train_pool))
+        return rng.sample(train_pool, k) if k > 0 else []

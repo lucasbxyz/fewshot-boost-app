@@ -1,12 +1,12 @@
-"""FewShot Boost — CLI with interactive wizard and flag-based commands.
+"""David vs Goliath — CLI with interactive wizard and flag-based commands.
 
 Usage:
-    fewshot-boost              Interactive wizard
-    fewshot-boost run  ...     Run a benchmark
-    fewshot-boost demo ...     Quick single-question demo
-    fewshot-boost distill ...  Distill Step-by-Step (LoRA fine-tuning)
-    fewshot-boost cost ...     Cost estimation calculator
-    fewshot-boost results      Show pre-computed results
+    dvg                        Interactive wizard
+    dvg run  ...               Run a benchmark
+    dvg demo ...               Quick single-question demo
+    dvg distill ...            Distill Step-by-Step (LoRA fine-tuning)
+    dvg cost ...               Cost estimation calculator
+    dvg results                Show pre-computed results
 """
 
 import sys
@@ -30,17 +30,17 @@ app = typer.Typer(
 )
 
 LOGO = r"""
-[bold cyan]    ___              __ _        _     ___             _
-   | __|___ __ __ __/ _| |_  ___| |_  | _ ) ___  ___ | |_
-   | _/ -_) V  V /\__ \ ' \/ _ \  _| | _ \/ _ \/ _ \|  _|
-   |_|\___|\_/\_/ |___/_||_\___/\__| |___/\___/\___/ \__|[/bold cyan]
+[bold cyan]    ___            _    _                 ___       _ _       _   _
+   |   \ __ ___ _(_)__| |  __ _____     / __|___  | (_) __ _| |_| |_
+   | |) / _` \ V / / _` | \ V (_-<    | (_ / _ \ | | |/ _` |  _| ' \
+   |___/\__,_|\_/|_\__,_|  \_//__/     \___\___/ |_|_|\__,_|\__|_||_|[/bold cyan]
 """
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 
 def _banner():
     console.print(LOGO)
-    console.print(f"  [dim]v{VERSION} — Intelligent few-shot selection for small language models[/dim]\n")
+    console.print(f"  [dim]v{VERSION} — When tiny models outsmart the giants[/dim]\n")
 
 
 def _short(name: str) -> str:
@@ -86,11 +86,19 @@ def _interactive():
         return
 
     if action == "cost":
-        model = inquirer.select("LLM model for cost estimation:", choices=list(
-            __import__("pricing").LLM_PRICING.keys()
-        )).execute()
-        vol = int(inquirer.number("Monthly API call volume:", default=100000, min_allowed=100).execute())
-        _cmd_cost(llm_model=model, monthly_volume=vol)
+        from pricing import LLM_PRICING
+        models = list(LLM_PRICING.keys())
+        direct = inquirer.select("Your current LLM:", choices=models).execute()
+        selector = inquirer.select("Selector LLM for hybrid:", choices=models, default="gpt-4o-mini").execute()
+        vol = int(inquirer.number("Monthly request volume:", default=100000, min_allowed=100).execute())
+        din = int(inquirer.number("Avg input tokens per request (your LLM):", default=500).execute())
+        dout = int(inquirer.number("Avg output tokens per request (your LLM):", default=50).execute())
+        dacc = float(inquirer.number("Your LLM's accuracy (0.0-1.0):", default=0.90).execute())
+        _cmd_cost(
+            direct_model=direct, selector_model=selector,
+            monthly_volume=vol, direct_input_tpq=din,
+            direct_output_tpq=dout, direct_accuracy=dacc,
+        )
         return
 
     # For run, demo, and distill — gather model config
@@ -151,7 +159,7 @@ def _interactive():
 
 @app.callback()
 def main(ctx: typer.Context):
-    """FewShot Boost — Make tiny models smarter with intelligent few-shot selection."""
+    """David vs Goliath — When tiny models outsmart the giants."""
     if ctx.invoked_subcommand is None:
         _interactive()
 
@@ -179,7 +187,7 @@ def _cmd_run(*, slm, benchmark, llm_provider, llm_model, api_key, shots, sample_
     from tasks import load_task
     from slm import load_model, generate_answer_generic
     from selector import RandomSelector, GenericLLMSelector
-    from pricing import CostEstimate
+    from pricing import CostEstimate, project_monthly
 
     console.print(Panel(
         f"[bold]SLM:[/bold] {_short(slm)}  |  "
@@ -269,7 +277,7 @@ def _cmd_run(*, slm, benchmark, llm_provider, llm_model, api_key, shots, sample_
         table.add_row(strat, f"[{color}]{acc:.1%}[/{color}]", f"{n_correct}/{len(results[strat])}")
     console.print(table)
 
-    # Cost estimation
+    # Cost estimation (token-based, from measured data)
     if llm_sel:
         cost_est = CostEstimate(
             llm_input_tokens=llm_sel.total_input_tokens,
@@ -280,7 +288,15 @@ def _cmd_run(*, slm, benchmark, llm_provider, llm_model, api_key, shots, sample_
             accuracy_random=accuracies.get("Random", 0),
             accuracy_llm_assisted=accuracies.get("LLM-Assisted", 0),
         )
-        proj = cost_est.project_monthly(100_000, llm_model, "self_hosted_cpu")
+        proj = project_monthly(
+            100_000,
+            direct_model=llm_model,
+            selector_model=llm_model,
+            measured=cost_est,
+        )
+
+        console.print(f"\n  [dim]Measured: {cost_est.avg_llm_input_per_q:.0f} selector input tokens/q, "
+                      f"{cost_est.avg_llm_output_per_q:.0f} output tokens/q[/dim]")
 
         cost_table = Table(title="\nCost Projection (100K calls/month, self-hosted SLM)",
                            box=box.ROUNDED, border_style="yellow")
@@ -288,12 +304,12 @@ def _cmd_run(*, slm, benchmark, llm_provider, llm_model, api_key, shots, sample_
         cost_table.add_column("Monthly Cost", justify="right")
         cost_table.add_column("Accuracy", justify="right")
 
-        cost_table.add_row("Pure LLM", f"${proj['pure_llm_cost']:,.2f}", "~90%")
-        cost_table.add_row("Hybrid (LLM-Assisted)", f"${proj['hybrid_total']:,.2f}",
+        cost_table.add_row("Pure LLM", f"${proj.pure_llm_cost:,.2f}", f"{proj.direct_accuracy:.0%}")
+        cost_table.add_row("Hybrid (LLM-Assisted)", f"${proj.hybrid_total:,.2f}",
                            f"{cost_est.accuracy_llm_assisted:.1%}")
         cost_table.add_row(
             "[bold green]Savings[/bold green]",
-            f"[bold green]${proj['savings_abs']:,.2f}/mo ({proj['savings_pct']:.0f}%)[/bold green]",
+            f"[bold green]${proj.savings_abs:,.2f}/mo ({proj.savings_pct:.0f}%)[/bold green]",
             "",
         )
         console.print(cost_table)
@@ -390,40 +406,78 @@ def _cmd_demo(*, slm, llm_provider, llm_model, api_key, shots=3, seed=42):
 
 @app.command()
 def cost(
-    llm_model: str = typer.Option("gpt-4o-mini", help="LLM model for pricing lookup"),
-    monthly_volume: int = typer.Option(100_000, help="Monthly API call volume"),
+    direct_model: str = typer.Option("gpt-4o-mini", help="Your current LLM model"),
+    selector_model: str = typer.Option("gpt-4o-mini", help="Selector LLM for hybrid"),
+    monthly_volume: int = typer.Option(100_000, help="Monthly request volume"),
+    direct_input_tpq: int = typer.Option(500, help="Avg input tokens per request (your LLM)"),
+    direct_output_tpq: int = typer.Option(50, help="Avg output tokens per request (your LLM)"),
+    direct_accuracy: float = typer.Option(0.90, help="Your LLM's accuracy (0.0-1.0)"),
 ):
-    """Show cost comparison across hosting tiers."""
-    _cmd_cost(llm_model=llm_model, monthly_volume=monthly_volume)
+    """Estimate your savings switching from pure LLM to hybrid."""
+    _cmd_cost(
+        direct_model=direct_model, selector_model=selector_model,
+        monthly_volume=monthly_volume,
+        direct_input_tpq=direct_input_tpq, direct_output_tpq=direct_output_tpq,
+        direct_accuracy=direct_accuracy,
+    )
 
 
-def _cmd_cost(*, llm_model, monthly_volume):
+def _cmd_cost(*, direct_model, selector_model, monthly_volume,
+              direct_input_tpq, direct_output_tpq, direct_accuracy):
     _banner()
-    from pricing import quick_cost_table, LLM_PRICING
+    from pricing import quick_cost_table, LLM_PRICING, project_monthly
 
-    if llm_model not in LLM_PRICING:
-        console.print(f"[yellow]Unknown model '{llm_model}', using gpt-4o-mini pricing.[/yellow]")
-        llm_model = "gpt-4o-mini"
+    if direct_model not in LLM_PRICING:
+        console.print(f"[yellow]Unknown model '{direct_model}', using gpt-4o-mini pricing.[/yellow]")
+        direct_model = "gpt-4o-mini"
 
-    rows = quick_cost_table(llm_model, monthly_volume)
+    console.print(Panel(
+        f"[bold]Your LLM:[/bold] {direct_model}  "
+        f"({direct_input_tpq} in + {direct_output_tpq} out tokens/question)\n"
+        f"[bold]Selector:[/bold] {selector_model}  |  "
+        f"[bold]Volume:[/bold] {monthly_volume:,}/mo  |  "
+        f"[bold]Your accuracy:[/bold] {direct_accuracy:.0%}",
+        title="Your Savings Estimate", border_style="yellow",
+    ))
+
+    rows = quick_cost_table(
+        direct_model, selector_model, monthly_volume,
+        direct_input_tpq=float(direct_input_tpq),
+        direct_output_tpq=float(direct_output_tpq),
+        direct_accuracy=direct_accuracy,
+    )
 
     table = Table(
-        title=f"\nCost Comparison — {monthly_volume:,} calls/month with {llm_model}",
+        title=f"\nCost Comparison — {monthly_volume:,} calls/month",
         box=box.ROUNDED, border_style="yellow",
     )
     table.add_column("SLM Hosting", style="bold")
     table.add_column("Pure LLM", justify="right")
     table.add_column("Hybrid", justify="right")
     table.add_column("Savings", justify="right", style="green")
+    table.add_column("Break-even", justify="right", style="dim")
 
     for r in rows:
+        be = f"{r['break_even']:,}" if r["break_even"] > 0 else "—"
         table.add_row(
             r["hosting"],
             f"${r['pure_llm_cost']:,.2f}",
             f"${r['hybrid_total']:,.2f}",
             f"${r['savings_abs']:,.2f} ({r['savings_pct']:.0f}%)",
+            be,
         )
     console.print(table)
+
+    proj = project_monthly(
+        monthly_volume,
+        direct_model=direct_model,
+        direct_input_tpq=float(direct_input_tpq),
+        direct_output_tpq=float(direct_output_tpq),
+        selector_model=selector_model,
+    )
+    if proj.savings_abs > 0:
+        console.print(f"\n  [bold green]Annual savings: ${proj.savings_abs * 12:,.0f}[/bold green] "
+                      f"(with self-hosted SLM)\n")
     console.print()
 
 

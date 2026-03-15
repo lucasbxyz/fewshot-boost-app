@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "fewshot-boost"
-version = "0.1.0"
-description = "Make tiny language models smarter with intelligent few-shot example selection"
+name = "david-vs-goliath"
+version = "0.2.0"
+description = "When tiny models outsmart the giants — intelligent few-shot selection and knowledge distillation"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -34,11 +34,11 @@ llm = [
     "openai>=1.30.0",
 ]
 all = [
-    "fewshot-boost[web,inference,llm]",
+    "david-vs-goliath[web,inference,llm]",
 ]
 
 [project.scripts]
-fewshot-boost = "cli:app"
+dvg = "cli:app"
 
 [tool.setuptools]
-py-modules = ["cli", "tasks", "pricing", "slm", "selector", "benchmark", "evaluator", "distill"]
+py-modules = ["cli", "tasks", "pricing", "slm", "selector", "benchmark", "distill"]

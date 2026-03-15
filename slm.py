@@ -38,16 +38,22 @@ def load_model(model_name: str) -> tuple:
 
     print(f"  Loading {model_name} on {device} (dtype={dtype})...")
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=dtype,
-        device_map=None,
-    )
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=dtype,
+            device_map=None,
+        )
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to load model '{model_name}'. Check the model ID and your "
+            f"internet connection. Error: {e}"
+        ) from e
+
     model = model.to(device)
     model.eval()
 
-    # Ensure pad token is set
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -197,9 +203,18 @@ def normalize_answer_generic(raw: str, choices: List[str]) -> str:
     text = raw.strip().lower()
     if not text:
         return "INVALID"
+    # Exact match first (handles multi-word choices like "Sci/Tech")
+    for choice in choices:
+        if text == choice.lower() or text.startswith(choice.lower()):
+            return choice
+    # Fuzzy: first token match
     first_token = text.split()[0].strip(".,!?;:'\"")
     for choice in choices:
-        if first_token == choice.lower() or first_token.startswith(choice.lower()[:4]):
+        if first_token == choice.lower():
+            return choice
+    # Substring search (e.g. "the answer is positive")
+    for choice in choices:
+        if choice.lower() in text:
             return choice
     return "INVALID"
 

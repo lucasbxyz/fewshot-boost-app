@@ -68,7 +68,10 @@ def generate_teacher_rationales(
     api_key: str,
     callback: Callable[[int, int], None] | None = None,
 ) -> list[AnnotatedExample]:
-    """Use the teacher LLM to produce (label, rationale) for every train example."""
+    """Use the teacher LLM to produce (label, rationale) for training examples only.
+
+    Only annotates task.train_pool to prevent test data leakage.
+    """
     if provider == "openai":
         import openai
         client = openai.OpenAI(api_key=api_key, timeout=30.0)
@@ -79,9 +82,9 @@ def generate_teacher_rationales(
         raise ValueError(f"Unsupported provider: {provider}")
 
     annotated: list[AnnotatedExample] = []
-    total = len(task.train_pool) + len(task.test_set)
+    total = len(task.train_pool)
 
-    for idx, ex in enumerate(task.train_pool + task.test_set):
+    for idx, ex in enumerate(task.train_pool):
         prompt = _rationale_prompt(ex.input_text, ex.context, task.choices)
 
         if provider == "openai":
