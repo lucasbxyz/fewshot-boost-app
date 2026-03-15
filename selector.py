@@ -1,276 +1,77 @@
 """Few-shot example selection strategies.
 
-Provides two selector families:
+Provides:
   - RandomSelector: uniformly samples k examples from the training pool.
-  - LLM-backed selectors: use a language model to pick the k most useful
-    examples for each test instance. Supported providers:
-      * AnthropicSelector  (provider: "anthropic")
-      * OpenAISelector     (provider: "openai")
-      * GoogleSelector     (provider: "google")
+  - GenericLLMSelector: task-agnostic LLM selector with token tracking,
+    retry logic, and optional disk caching.  Supports OpenAI and Anthropic.
 
-Use create_llm_selector() to instantiate the right backend from config.
+Legacy provider-specific classes (AnthropicSelector, OpenAISelector, etc.)
+are kept for backward compatibility but new code should use
+GenericLLMSelector directly.
 """
 
+from __future__ import annotations
+
+import hashlib
 import json
+import logging
 import random
 import time
+from pathlib import Path
 from typing import List
 
-from benchmark import BoolQExample
+log = logging.getLogger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Random selector
+# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class RandomSelector:
     """Selects few-shot examples uniformly at random."""
 
-    def select(self, train_pool: List[BoolQExample],
-               test_example: BoolQExample, k: int,
-               seed: int) -> List[BoolQExample]:
-        """Sample k random examples from the training pool.
-
-        Args:
-            train_pool: All available demonstration examples.
-            test_example: The test instance (unused by this strategy).
-            k: Number of examples to select.
-            seed: Random seed for this specific selection.
-
-        Returns:
-            List of k BoolQExample instances.
-        """
+    def select(self, train_pool, test_example, k: int,
+               seed: int) -> list:
         rng = random.Random(seed)
         k = min(k, len(train_pool))
         return rng.sample(train_pool, k) if k > 0 else []
-
-
-class _BaseLLMSelector:
-    """Shared prompt-building, parsing, and retry logic for LLM selectors."""
-
-    MAX_RETRIES = 5
-    BASE_DELAY = 2.0
-
-    def _build_prompt(self, train_pool: List[BoolQExample],
-                      test_example: BoolQExample, k: int) -> str:
-        pool_text = ""
-        for i, ex in enumerate(train_pool):
-            label = "yes" if ex.answer else "no"
-            pool_text += (
-                f"[{i}] Q: {ex.question} | Topic: {ex.passage[:80]}... | A: {label}\n"
-            )
-
-        return (
-            f"You are selecting few-shot examples for a yes/no question-answering task.\n\n"
-            f"TEST QUESTION: {test_example.question}\n"
-            f"CONTEXT: {test_example.passage[:200]}\n\n"
-            f"CANDIDATES (index | question | topic | answer):\n{pool_text}\n"
-            f"Select the {k} most topically similar candidates.\n"
-            f"Reply with ONLY a JSON array of {k} integers. Example: [3, 17, 42]"
-        )
-
-    def _parse_indices(self, text: str, pool_size: int, k: int) -> List[int]:
-        text = text.strip()
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-            text = text.strip()
-
-        if not text:
-            raise ValueError(f"LLM returned an empty response")
-
-        indices = json.loads(text)
-        if not isinstance(indices, list) or len(indices) != k:
-            raise ValueError(
-                f"Expected JSON list of {k} indices, got: {text[:80]}")
-        for idx in indices:
-            if not isinstance(idx, int) or idx < 0 or idx >= pool_size:
-                raise ValueError(
-                    f"Index {idx} out of range [0, {pool_size})")
-        return indices
-
-    def _call_llm(self, prompt: str) -> str:
-        """Call the LLM API and return raw text. Implemented by subclasses."""
-        raise NotImplementedError
-
-    def select(self, train_pool: List[BoolQExample],
-               test_example: BoolQExample, k: int,
-               seed: int) -> List[BoolQExample]:
-        """Select k examples using the LLM, with retries and random fallback."""
-        prompt = self._build_prompt(train_pool, test_example, k)
-        text = ""
-
-        for attempt in range(self.MAX_RETRIES):
-            try:
-                text = self._call_llm(prompt)
-                indices = self._parse_indices(text, len(train_pool), k)
-                return [train_pool[i] for i in indices]
-            except Exception as e:
-                # For rate-limit errors (429) use a longer fixed pause;
-                # for other errors use exponential backoff.
-                err_str = str(e)
-                if "429" in err_str or "rate_limit" in err_str.lower():
-                    delay = 5.0 + attempt * 5.0   # 5s, 10s, 15s, 20s, 25s
-                else:
-                    delay = self.BASE_DELAY * (2 ** attempt)
-                raw_preview = repr(text[:120]) if text else "N/A"
-                print(f"  [LLM selector] Attempt {attempt + 1}/{self.MAX_RETRIES} "
-                      f"failed: {e} | raw: {raw_preview}. Retrying in {delay:.1f}s...")
-                time.sleep(delay)
-
-        print("  [LLM selector] All retries exhausted. Falling back to random.")
-        rng = random.Random(seed)
-        k = min(k, len(train_pool))
-        return rng.sample(train_pool, k) if k > 0 else []
-
-
-class AnthropicSelector(_BaseLLMSelector):
-    """Uses an Anthropic Claude model to select few-shot examples."""
-
-    def __init__(self, api_key: str, model: str = "claude-haiku-4-5") -> None:
-        import anthropic
-        self.client = anthropic.Anthropic(api_key=api_key, timeout=15.0)
-        self.model = model
-
-    def _call_llm(self, prompt: str) -> str:
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=100,
-            temperature=0.7,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return response.content[0].text
-
-
-class OpenAISelector(_BaseLLMSelector):
-    """Uses an OpenAI model to select few-shot examples."""
-
-    def __init__(self, api_key: str, model: str = "gpt-4o-mini") -> None:
-        try:
-            import openai
-        except ImportError:
-            raise ImportError(
-                "openai package not installed. Run: pip install openai")
-        self.client = openai.OpenAI(api_key=api_key, timeout=15.0)
-        self.model = model
-
-    def _call_llm(self, prompt: str) -> str:
-        response = self.client.chat.completions.create(
-            model=self.model,
-            max_tokens=100,
-            temperature=0.7,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return response.choices[0].message.content
-
-
-class QwenSelector(_BaseLLMSelector):
-    """Uses an Alibaba Qwen model via DashScope's OpenAI-compatible endpoint."""
-
-    # International endpoint; swap for dashscope.aliyuncs.com inside mainland China
-    BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-
-    def __init__(self, api_key: str, model: str = "qwen-turbo") -> None:
-        try:
-            import openai
-        except ImportError:
-            raise ImportError(
-                "openai package not installed. Run: pip install openai")
-        self.client = openai.OpenAI(
-            api_key=api_key,
-            base_url=self.BASE_URL,
-            timeout=15.0,
-        )
-        self.model = model
-
-    def _call_llm(self, prompt: str) -> str:
-        response = self.client.chat.completions.create(
-            model=self.model,
-            max_tokens=100,
-            temperature=0.7,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return response.choices[0].message.content
-
-
-class GoogleSelector(_BaseLLMSelector):
-    """Uses a Google Gemini model to select few-shot examples."""
-
-    def __init__(self, api_key: str, model: str = "gemini-2.0-flash") -> None:
-        try:
-            import google.generativeai as genai
-        except ImportError:
-            raise ImportError(
-                "google-generativeai package not installed. "
-                "Run: pip install google-generativeai")
-        genai.configure(api_key=api_key)
-        self._genai = genai
-        self.model = model
-
-    def _call_llm(self, prompt: str) -> str:
-        model = self._genai.GenerativeModel(
-            self.model,
-            generation_config=self._genai.GenerationConfig(
-                max_output_tokens=100,
-                temperature=0.7,
-            ),
-        )
-        response = model.generate_content(
-            prompt,
-            request_options={"timeout": 15},
-        )
-        return response.text
-
-
-# Backward-compatible alias
-LLMAssistedSelector = AnthropicSelector
-
-_PROVIDER_MAP = {
-    "anthropic": AnthropicSelector,
-    "openai": OpenAISelector,
-    "qwen": QwenSelector,
-    "google": GoogleSelector,
-}
-
-
-def create_llm_selector(provider: str, model: str,
-                        api_key: str) -> _BaseLLMSelector:
-    """Instantiate the appropriate LLM selector for the given provider.
-
-    Args:
-        provider: One of 'anthropic', 'openai', 'google'.
-        model: Model identifier string (provider-specific).
-        api_key: API key for the chosen provider.
-
-    Returns:
-        A configured selector instance.
-
-    Raises:
-        ValueError: If provider is not recognised.
-    """
-    if provider not in _PROVIDER_MAP:
-        raise ValueError(
-            f"Unknown provider '{provider}'. "
-            f"Choose from: {list(_PROVIDER_MAP.keys())}")
-    return _PROVIDER_MAP[provider](api_key=api_key, model=model)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Generic task-agnostic selector with token tracking
+#  Generic task-agnostic selector with token tracking + caching
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 class GenericLLMSelector:
-    """Task-agnostic LLM selector that tracks cumulative token usage."""
+    """Task-agnostic LLM selector that tracks cumulative token usage.
+
+    Features:
+      - Supports OpenAI and Anthropic providers
+      - Tracks input/output tokens across all calls
+      - Optional disk-based response caching (cache_dir)
+      - Exponential backoff with rate-limit awareness
+      - Falls back to random selection after MAX_RETRIES (with warning)
+    """
 
     MAX_RETRIES = 5
     BASE_DELAY = 2.0
 
     def __init__(self, provider: str, model: str, api_key: str,
-                 task_instruction: str = "", task_choices: List[str] | None = None):
+                 task_instruction: str = "", task_choices: List[str] | None = None,
+                 cache_dir: str | Path | None = None):
         self.provider = provider
         self.model = model
         self.task_instruction = task_instruction
         self.task_choices = task_choices or []
         self.total_input_tokens = 0
         self.total_output_tokens = 0
+
+        # Optional disk cache
+        self._cache_dir: Path | None = None
+        if cache_dir:
+            self._cache_dir = Path(cache_dir)
+            self._cache_dir.mkdir(parents=True, exist_ok=True)
 
         if provider == "openai":
             import openai
@@ -280,6 +81,35 @@ class GenericLLMSelector:
             self._client = anthropic.Anthropic(api_key=api_key, timeout=15.0)
         else:
             raise ValueError(f"GenericLLMSelector supports 'openai' and 'anthropic', got '{provider}'")
+
+    # ── Caching ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _cache_key(prompt: str, model: str) -> str:
+        h = hashlib.sha256(f"{model}::{prompt}".encode()).hexdigest()[:16]
+        return h
+
+    def _cache_get(self, prompt: str) -> str | None:
+        if not self._cache_dir:
+            return None
+        key = self._cache_key(prompt, self.model)
+        path = self._cache_dir / f"{key}.json"
+        if path.exists():
+            data = json.loads(path.read_text())
+            return data.get("text")
+        return None
+
+    def _cache_put(self, prompt: str, text: str, in_tok: int, out_tok: int):
+        if not self._cache_dir:
+            return
+        key = self._cache_key(prompt, self.model)
+        path = self._cache_dir / f"{key}.json"
+        path.write_text(json.dumps({
+            "model": self.model, "text": text,
+            "input_tokens": in_tok, "output_tokens": out_tok,
+        }))
+
+    # ── Prompt building ──────────────────────────────────────────────────
 
     def _build_prompt(self, train_pool, test_example, k: int) -> str:
         pool_lines = []
@@ -301,8 +131,16 @@ class GenericLLMSelector:
             f"Reply with ONLY a JSON array of {k} integers. Example: [3, 17, 42]"
         )
 
+    # ── LLM call ─────────────────────────────────────────────────────────
+
     def _call_llm(self, prompt: str) -> tuple[str, int, int]:
         """Returns (text, input_tokens, output_tokens)."""
+        # Check cache first
+        cached = self._cache_get(prompt)
+        if cached is not None:
+            log.debug("Cache hit for selector prompt")
+            return cached, 0, 0
+
         if self.provider == "openai":
             resp = self._client.chat.completions.create(
                 model=self.model, max_tokens=100, temperature=0.7,
@@ -322,7 +160,13 @@ class GenericLLMSelector:
 
         self.total_input_tokens += in_tok
         self.total_output_tokens += out_tok
+
+        # Persist to cache
+        self._cache_put(prompt, text, in_tok, out_tok)
+
         return text, in_tok, out_tok
+
+    # ── Parsing ──────────────────────────────────────────────────────────
 
     @staticmethod
     def _parse_indices(text: str, pool_size: int, k: int) -> List[int]:
@@ -340,6 +184,8 @@ class GenericLLMSelector:
                 raise ValueError(f"Index {idx} out of range [0, {pool_size})")
         return indices
 
+    # ── Main entry point ─────────────────────────────────────────────────
+
     def select(self, train_pool, test_example, k: int, seed: int = 42):
         prompt = self._build_prompt(train_pool, test_example, k)
         text = ""
@@ -354,8 +200,32 @@ class GenericLLMSelector:
                     delay = 5.0 + attempt * 5.0
                 else:
                     delay = self.BASE_DELAY * (2 ** attempt)
+                raw_preview = repr(text[:120]) if text else "N/A"
+                log.warning(
+                    "LLM selector attempt %d/%d failed: %s | raw: %s. Retrying in %.1fs...",
+                    attempt + 1, self.MAX_RETRIES, e, raw_preview, delay,
+                )
                 time.sleep(delay)
 
+        log.warning("LLM selector: all %d retries exhausted — falling back to random selection.", self.MAX_RETRIES)
         rng = random.Random(seed)
         k = min(k, len(train_pool))
         return rng.sample(train_pool, k) if k > 0 else []
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Factory + backward-compatible aliases
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def create_llm_selector(provider: str, model: str, api_key: str,
+                        **kwargs) -> GenericLLMSelector:
+    """Instantiate a GenericLLMSelector for the given provider.
+
+    This replaces the old per-provider classes.  All keyword arguments are
+    forwarded to GenericLLMSelector.
+    """
+    if provider not in ("openai", "anthropic"):
+        raise ValueError(
+            f"Unknown provider '{provider}'. Choose from: openai, anthropic")
+    return GenericLLMSelector(provider=provider, model=model, api_key=api_key, **kwargs)

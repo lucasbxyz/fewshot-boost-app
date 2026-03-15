@@ -1,10 +1,33 @@
+# Python
 __pycache__/
-*.pyc
-.DS_Store
-cache/
-.env
+*.py[cod]
 *.egg-info/
 dist/
 build/
+*.egg
+
+# Virtual environments
 .venv/
 venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+cache/
+results/
+*.pt
+*.bin
+*.safetensors
+
+# Secrets
+.env
+credentials.json

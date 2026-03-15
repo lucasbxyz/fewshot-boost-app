@@ -4,18 +4,21 @@ Implements the core mechanism from Hsieh et al. (2023):
   1. Teacher LLM generates (label, rationale) pairs for training data
   2. Student SLM is LoRA-fine-tuned with a multi-task loss:
        L = λ · L_label + (1-λ) · L_rationale
-     achieved via dataset mixing at ratio λ : (1-λ)
+     achieved via deterministic stratified dataset mixing at ratio λ : (1-λ)
   3. Distilled student is evaluated against the original
 """
 
 from __future__ import annotations
 
+import logging
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, List
 
 import torch
 from torch.utils.data import Dataset as TorchDataset
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -122,7 +125,7 @@ def generate_teacher_rationales(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Phase 2: Multi-task dataset with λ-weighting
+#  Phase 2: Multi-task dataset with λ-weighting (deterministic stratified)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -130,8 +133,9 @@ class DistillDataset(TorchDataset):
     """Tokenized dataset mixing label-prediction and rationale-generation tasks.
 
     The loss weighting  L = λ · L_label + (1-λ) · L_rationale  is achieved by
-    mixing the two task types at ratio λ : (1-λ) in the dataset.  In expectation
-    over random sampling, this is equivalent to explicit loss weighting.
+    deterministic stratified assignment: exactly ⌊λ·N⌋ examples get the
+    label-only task and the rest get rationale+label.  This eliminates the
+    variance of the previous random-coin approach at small dataset sizes.
     """
 
     def __init__(self, examples: list[AnnotatedExample], task_instruction: str,
@@ -152,26 +156,33 @@ class DistillDataset(TorchDataset):
             f"First state your answer, then explain your reasoning in 1-2 sentences."
         )
 
-        for ex in examples:
+        # Deterministic stratified split instead of random coin flip
+        n_label = round(len(examples) * lambda_weight)
+        indices = list(range(len(examples)))
+        rng.shuffle(indices)
+        label_indices = set(indices[:n_label])
+
+        for i, ex in enumerate(examples):
             user_msg = f"Context: {ex.context}\n\n{ex.input_text}" if ex.context else ex.input_text
 
-            label_messages = [
-                {"role": "system", "content": label_system},
-                {"role": "user", "content": user_msg},
-                {"role": "assistant", "content": ex.label},
-            ]
-            rationale_messages = [
-                {"role": "system", "content": rationale_system},
-                {"role": "user", "content": user_msg},
-                {"role": "assistant", "content": f"{ex.label}. {ex.rationale}"},
-            ]
-
-            if rng.random() < lambda_weight:
-                self.items.append(self._tokenize(label_messages))
+            if i in label_indices:
+                messages = [
+                    {"role": "system", "content": label_system},
+                    {"role": "user", "content": user_msg},
+                    {"role": "assistant", "content": ex.label},
+                ]
             else:
-                self.items.append(self._tokenize(rationale_messages))
+                messages = [
+                    {"role": "system", "content": rationale_system},
+                    {"role": "user", "content": user_msg},
+                    {"role": "assistant", "content": f"{ex.label}. {ex.rationale}"},
+                ]
+
+            self.items.append(self._tokenize(messages))
 
         rng.shuffle(self.items)
+        log.info("DistillDataset: %d examples (%d label, %d rationale)",
+                 len(self.items), n_label, len(examples) - n_label)
 
     def _tokenize(self, messages: list[dict]) -> dict:
         prompt_msgs = messages[:-1]
@@ -246,8 +257,8 @@ def fine_tune_student(
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total_params = sum(p.numel() for p in model.parameters())
-    print(f"  LoRA: {trainable:,} trainable / {total_params:,} total "
-          f"({trainable/total_params:.2%})")
+    log.info("LoRA: %s trainable / %s total (%.2f%%)",
+             f"{trainable:,}", f"{total_params:,}", trainable / total_params * 100)
 
     loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
@@ -279,7 +290,7 @@ def fine_tune_student(
                 callback(step, total_steps, loss.item())
 
         avg_loss = epoch_loss / max(len(loader), 1)
-        print(f"  Epoch {epoch + 1}/{epochs}  avg_loss={avg_loss:.4f}")
+        log.info("Epoch %d/%d  avg_loss=%.4f", epoch + 1, epochs, avg_loss)
 
     model.eval()
     model = model.merge_and_unload()

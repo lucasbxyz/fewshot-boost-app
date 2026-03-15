@@ -1,26 +1,72 @@
-# ⚔️ David vs Goliath
+---
+title: David vs Goliath
+emoji: "\U0001F3AF"
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 7860
+pinned: false
+---
 
-**When tiny models outsmart the giants.**
+# David vs Goliath
 
-A small language model (135M–360M parameters) answers yes/no questions barely better than a coin flip. But what if a large language model could pick the *right* examples to show it first — or even teach it to reason?
+**Cut your LLM API costs by up to 90% without sacrificing accuracy.**
 
-David vs Goliath benchmarks three prompting strategies on multiple datasets, distills reasoning from teacher LLMs into student SLMs via LoRA, and provides an interactive dashboard, live inference demo, benchmark lab with cost estimation, and a pip-installable CLI.
+Instead of sending every request to an expensive LLM, David vs Goliath uses a large model only to *select the right examples*, then a tiny local model (135M-1.7B parameters) does the actual work. The result: comparable accuracy at a fraction of the cost.
+
+## The Problem
+
+You're spending $500-5,000/month on LLM API calls for classification, Q&A, or labeling tasks. Every single request hits GPT-4o or Claude -- even though 80% of those requests are routine and predictable.
+
+## The Solution
+
+```
+┌──────────────┐                    ┌────────────────┐
+│  Your Query  │ ──── LLM picks ──> │  Best Examples │
+└──────────────┘    3 examples      └───────┬────────┘
+                                            │
+                                    ┌───────▼────────┐
+                                    │  Small Model   │
+                                    │  (135M params) │
+                                    │  answers fast  │
+                                    │  & free (local)│
+                                    └───────┬────────┘
+                                            │
+                                        answer
+```
+
+**Three strategies benchmarked:**
+1. **Zero-Shot** -- small model answers cold (baseline)
+2. **Random Few-Shot** -- randomly picked examples
+3. **LLM-Assisted** -- LLM picks the *best* examples for each question
+
+**Plus distillation:** the LLM teaches the small model to *reason*, not just classify -- via LoRA fine-tuning with rationale generation.
 
 ## Key Results
 
 | Strategy | SmolLM2-135M | SmolLM2-360M |
 |---|---|---|
-| Zero-Shot | 49–52% | 54–57% |
-| Random Few-Shot | 45–52% | 50–54% |
-| **LLM-Assisted** | **50–63%** | **53–60%** |
+| Zero-Shot | 49-52% | 54-57% |
+| Random Few-Shot | 45-52% | 50-54% |
+| **LLM-Assisted** | **50-63%** | **53-60%** |
 
-**Best boost: +14.2 percentage points** over zero-shot (GPT-4o-mini selector, seed 789).
+**Best boost: +14.2 percentage points** over zero-shot baseline.
 
-Over 20,000 predictions across 3 model sizes, 3 LLM selectors (GPT-4o, GPT-4o-mini, Claude Haiku), 4 seeds, and 5 runs per configuration.
+Over **20,000 predictions** across 3 model sizes, 3 LLM selectors (GPT-4o, GPT-4o-mini, Claude Haiku), 4 seeds, and 5 runs per configuration.
+
+## Cost Impact
+
+| Scenario | Pure LLM | Hybrid (DvG) | Savings |
+|---|---|---|---|
+| 100K calls/mo, GPT-4o | $2,750/mo | $156/mo | **$2,594/mo (94%)** |
+| 100K calls/mo, GPT-4o-mini | $27/mo | $16/mo | **$11/mo (42%)** |
+| 1M calls/mo, GPT-4o | $27,500/mo | $1,560/mo | **$25,940/mo (94%)** |
+
+*Self-hosted SLM. Actual savings depend on your token usage and hosting choice.*
 
 ## Quickstart
 
-### Option A: Web Dashboard (Streamlit)
+### Dashboard (works everywhere, no GPU needed)
 
 ```bash
 git clone https://github.com/lucasbxyz/fewshot-boost-app.git
@@ -29,13 +75,13 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Opens at **http://localhost:8501** with tabs: Dashboard, Live Demo, Benchmark Lab, and Distillation.
+Opens at **http://localhost:8501** with 5 tabs: Dashboard, Live Demo, Benchmark Lab, Distillation, and Your Savings calculator.
 
-### Option B: CLI Tool
+### CLI Tool
 
 ```bash
 pip install -e ".[all]"    # installs everything including the dvg command
-dvg                        # launches interactive wizard
+dvg                        # interactive wizard
 ```
 
 Or use flags directly:
@@ -57,7 +103,7 @@ dvg distill --benchmark boolq --llm-model gpt-4o-mini --api-key $OPENAI_API_KEY
 dvg results
 ```
 
-### Enable Live Inference (both web & CLI)
+### Enable Live Inference
 
 Live Demo, Benchmark Lab, Distillation, and CLI commands that run models need:
 
@@ -65,69 +111,16 @@ Live Demo, Benchmark Lab, Distillation, and CLI commands that run models need:
 pip install torch transformers datasets accelerate anthropic openai peft
 ```
 
-Or via optional extras: `pip install -e ".[inference,llm]"`
+Or: `pip install -e ".[inference,llm]"`
 
 ## Deploy to Streamlit Community Cloud (Free)
 
-The dashboard works on Streamlit Cloud with zero configuration. Live inference is local-only.
+The dashboard works on Streamlit Cloud with zero configuration. Live inference features (Demo, Benchmark Lab, Distillation) require local hardware.
 
-1. **Push to GitHub**
-2. **Go to [share.streamlit.io](https://share.streamlit.io)** and sign in with GitHub.
-3. **Click "New app"** and select:
-   - Repository: `lucasbxyz/fewshot-boost-app`
-   - Branch: `main`
-   - Main file path: `app.py`
-4. **Click "Deploy"** — live within minutes. Auto-redeploys on push to `main`.
-
-## How It Works
-
-```
-┌─────────────────────────────────────────────────┐
-│                  Test Question                   │
-│  "Is the capital of France Paris?"               │
-└──────────────────────┬──────────────────────────┘
-                       │
-         ┌─────────────┼──────────────┐
-         ▼             ▼              ▼
-   ┌──────────┐  ┌──────────┐  ┌───────────┐
-   │ Zero-Shot│  │  Random  │  │LLM-Assisted│
-   │ (no ex.) │  │ (random) │  │ (smart)    │
-   └────┬─────┘  └────┬─────┘  └─────┬─────┘
-        │              │              │
-        ▼              ▼              ▼
-   ┌──────────────────────────────────────┐
-   │         Small Language Model          │
-   │    (SmolLM2-135M / 360M / 1.7B)     │
-   └──────────────────────────────────────┘
-        │              │              │
-        ▼              ▼              ▼
-     answer          answer        answer
-```
-
-1. **Zero-Shot** — the SLM answers with no examples (baseline)
-2. **Random** — *k* examples are randomly sampled from a training pool
-3. **LLM-Assisted** — a large model (GPT-4o, Claude, etc.) picks the *k* most relevant examples
-4. **Distillation** — the teacher LLM generates labels + rationales, then the student SLM is LoRA-fine-tuned with multi-task loss
-
-## Project Structure
-
-```
-david-vs-goliath/
-├── app.py              # Streamlit app (dashboard + live demo + benchmark lab + distillation)
-├── cli.py              # CLI tool (interactive wizard + flag commands)
-├── distill.py          # Distilling Step-by-Step pipeline (LoRA fine-tuning)
-├── tasks.py            # Generic task abstraction + benchmark loaders
-├── pricing.py          # LLM pricing tables + cost calculator
-├── slm.py              # Small model inference
-├── selector.py         # Few-shot selectors (random + LLM-assisted w/ token tracking)
-├── config.yaml         # Configuration (placeholder API keys)
-├── pyproject.toml      # pip install -e . (makes dvg command available)
-├── requirements.txt    # Python dependencies
-└── data/
-    ├── all_results_summary.csv
-    ├── all_results_per_question.csv
-    └── all_results_per_category.csv
-```
+1. Push to GitHub
+2. Go to [share.streamlit.io](https://share.streamlit.io) and sign in
+3. Select this repo, branch `main`, main file `app.py`
+4. Deploy -- live within minutes
 
 ## Supported Benchmarks
 
@@ -138,12 +131,38 @@ david-vs-goliath/
 | **AG News** | Topic classification | World, Sports, Business, Sci/Tech |
 | **Custom** | Define your own task template | any |
 
+## Architecture
+
+```
+david-vs-goliath/
+├── app.py              # Streamlit dashboard (5 tabs)
+├── cli.py              # CLI tool (interactive wizard + commands)
+├── selector.py         # Few-shot selectors (random + LLM-assisted w/ caching)
+├── slm.py              # Small model inference (CUDA / MPS / CPU)
+├── tasks.py            # Task abstraction + benchmark loaders
+├── distill.py          # Distilling Step-by-Step (LoRA fine-tuning)
+├── pricing.py          # Token-based cost estimation engine
+├── benchmark.py        # Legacy BoolQ loader (backward compat)
+├── config.yaml         # Configuration
+├── tests/              # Test suite (41 tests)
+├── data/               # Pre-computed benchmark CSVs
+├── cache/              # LLM selector response cache (gitignored)
+└── results/            # Persisted run results (gitignored)
+```
+
 ## Tech Stack
 
 - **Web UI**: Streamlit, Plotly
 - **CLI**: Typer, Rich, InquirerPy
 - **Models**: HuggingFace Transformers (SmolLM2, TinyLlama, Phi-3, Gemma)
 - **Distillation**: LoRA via PEFT, multi-task training
-- **LLM Selectors**: OpenAI API, Anthropic API (with token tracking)
+- **LLM Selectors**: OpenAI API, Anthropic API (with token tracking + caching)
 - **Benchmarks**: Google BoolQ, Stanford SST-2, AG News (via HuggingFace Datasets)
 - **Cost Estimation**: Token-based LLM pricing + SLM hosting tiers
+
+## Running Tests
+
+```bash
+pip install -e ".[dev]"
+python -m pytest tests/ -v
+```

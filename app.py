@@ -12,6 +12,7 @@ from pathlib import Path
 
 APP_DIR = Path(__file__).parent
 DATA_DIR = APP_DIR / "data"
+CACHE_DIR = APP_DIR / "cache"
 
 _STRAT = {
     "zero_shot": "Zero-Shot",
@@ -88,17 +89,17 @@ if _ML:
 
 # ── Page config ──────────────────────────────────────────────────────────────
 
-st.set_page_config(page_title="David vs Goliath", page_icon="⚔️", layout="wide")
+st.set_page_config(page_title="David vs Goliath", page_icon="DvG", layout="wide")
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.markdown("# ⚔️ David vs Goliath")
-    st.caption("When tiny models outsmart the giants")
+    st.markdown("# David vs Goliath")
+    st.caption("Cut your LLM API bill by up to 90%")
     st.divider()
     page = st.radio(
         "Navigate",
-        ["📊 Dashboard", "🔬 Live Demo", "🧪 Benchmark Lab", "🎓 Distillation", "💰 Your Savings"],
+        ["Dashboard", "Live Demo", "Benchmark Lab", "Distillation", "Your Savings"],
         label_visibility="collapsed",
     )
     st.divider()
@@ -112,10 +113,9 @@ with st.sidebar:
 def page_dashboard():
     st.title("Benchmark Results")
     st.markdown(
-        "Comparing **zero-shot**, **random few-shot**, and **LLM-assisted few-shot** "
-        "selection strategies on the "
-        "[BoolQ](https://github.com/google-research-datasets/boolean-questions) "
-        "yes/no question-answering benchmark."
+        "**20,000+ predictions** across multiple model sizes, LLM selectors, and seeds "
+        "prove that intelligent example selection consistently lifts small-model accuracy — "
+        "at a fraction of full-LLM cost."
     )
 
     df = _load_summary()
@@ -165,7 +165,7 @@ def page_dashboard():
     max_boost = max(boosts) if boosts else 0
     c2.metric("Max LLM Boost", f"+{max_boost:.1%}", "over zero-shot")
 
-    c3.metric("Configurations", str(len(filt)), "model × strategy × seed")
+    c3.metric("Configurations", str(len(filt)), "model x strategy x seed")
     c4.metric("Total Predictions", f"{len(pq):,}", "individual Q&A pairs")
 
     st.divider()
@@ -268,7 +268,7 @@ def page_dashboard():
     # ── 3. Seed Stability Heatmap ────────────────────────────────────────────
     st.subheader("Reproducibility Across Seeds")
     heat = filt.copy()
-    heat["Config"] = heat["Model"] + " · " + heat["Strategy"]
+    heat["Config"] = heat["Model"] + " / " + heat["Strategy"]
     pivot = heat.pivot_table(
         index="Config", columns="seed", values="mean_accuracy", aggfunc="mean"
     )
@@ -349,15 +349,15 @@ def page_dashboard():
             st.info("No per-question data matches current filters.")
 
     # ── About ────────────────────────────────────────────────────────────────
-    with st.expander("ℹ️ About this benchmark"):
+    with st.expander("About this benchmark"):
         st.markdown(
             "**David vs Goliath** evaluates whether using a large language model (LLM) "
             "to intelligently select few-shot examples can improve a small language "
-            "model's (SLM) accuracy on yes/no question answering.\n\n"
+            "model's (SLM) accuracy on classification tasks.\n\n"
             "**Three strategies:**\n"
-            "- **Zero-Shot** — SLM answers with no examples\n"
-            "- **Random** — SLM receives *k* randomly-selected examples\n"
-            "- **LLM-Assisted** — An LLM picks the *k* most relevant examples "
+            "- **Zero-Shot** -- SLM answers with no examples\n"
+            "- **Random** -- SLM receives *k* randomly-selected examples\n"
+            "- **LLM-Assisted** -- An LLM picks the *k* most relevant examples "
             "for each question\n\n"
             f"**Key finding:** LLM-assisted selection consistently outperforms "
             f"random selection, with up to **+{max_boost:.1%}** improvement "
@@ -374,7 +374,7 @@ def _show_result(answer: str, raw: str, ground_truth: str | None, shots: list):
     """Render the result card for one strategy."""
     if ground_truth:
         correct = answer == ground_truth
-        icon = "✅" if correct else "❌"
+        icon = "+" if correct else "x"
         st.markdown(f"## {icon} {answer}")
     else:
         st.markdown(f"## {answer}")
@@ -384,7 +384,7 @@ def _show_result(answer: str, raw: str, ground_truth: str | None, shots: list):
             for i, s in enumerate(shots, 1):
                 text = getattr(s, "input_text", getattr(s, "question", str(s)))
                 label = getattr(s, "correct", "yes" if getattr(s, "answer", True) else "no")
-                st.markdown(f"**{i}.** _{text[:100]}_... → **{label}**")
+                st.markdown(f"**{i}.** _{text[:100]}_... -> **{label}**")
 
     with st.expander("Raw model output"):
         st.code(raw if raw else "(empty)")
@@ -394,21 +394,21 @@ def page_live_demo():
     st.title("Live Inference Demo")
 
     if not _ML:
-        st.warning("**Live inference is unavailable** — PyTorch is not installed.")
+        st.warning("**Live inference is unavailable** -- PyTorch is not installed.")
         st.markdown(
             "This feature requires local dependencies. Install them and relaunch:\n\n"
             "```bash\n"
             "pip install torch transformers datasets accelerate anthropic openai\n"
             "streamlit run app.py\n"
             "```\n\n"
-            "The **📊 Dashboard** tab works everywhere (including Streamlit Cloud) "
+            "The **Dashboard** tab works everywhere (including Streamlit Cloud) "
             "without these dependencies."
         )
         return
 
     st.markdown(
         "Pick a BoolQ question (or write your own), then see how all three "
-        "strategies affect the small model's answer — side by side."
+        "strategies affect the small model's answer -- side by side."
     )
 
     # ── Sidebar config ───────────────────────────────────────────────────────
@@ -437,7 +437,7 @@ def page_live_demo():
         st.write("Loading BoolQ dataset...")
         task = load_boolq_task(n_train=50, n_test=100, seed=seed)
         status.update(
-            label=f"Ready — {_short(slm)} on {device}  ·  "
+            label=f"Ready -- {_short(slm)} on {device}  |  "
             f"{len(task.train_pool)} train / {len(task.test_set)} test examples",
             state="complete",
         )
@@ -450,7 +450,7 @@ def page_live_demo():
         st.session_state.question = ""
         st.session_state.ground_truth = None
 
-    if st.button("🎲 Load Random BoolQ Question"):
+    if st.button("Load Random BoolQ Question"):
         import random as _rng
 
         ex = _rng.choice(task.test_set)
@@ -477,7 +477,7 @@ def page_live_demo():
 
     # ── Run ──────────────────────────────────────────────────────────────────
     if st.button(
-        "🚀 Run All Three Strategies", type="primary", use_container_width=True
+        "Run All Three Strategies", type="primary", use_container_width=True
     ):
         if not passage.strip() or not question.strip():
             st.error("Enter both a passage and a question.")
@@ -527,6 +527,7 @@ def page_live_demo():
                             provider, llm_model, api_key,
                             task_instruction=task.instruction,
                             task_choices=task.choices,
+                            cache_dir=CACHE_DIR / "selector",
                         )
                         shots = llm_sel.select(
                             task.train_pool, test_ex, n_shots, seed=seed
@@ -551,7 +552,7 @@ def page_benchmark_lab():
     st.title("Benchmark Lab")
 
     if not _ML:
-        st.warning("**Benchmark Lab requires local dependencies** — PyTorch is not installed.")
+        st.warning("**Benchmark Lab requires local dependencies** -- PyTorch is not installed.")
         st.markdown(
             "Install inference dependencies and relaunch:\n\n"
             "```bash\n"
@@ -608,16 +609,16 @@ def page_benchmark_lab():
             format_func=lambda k: BENCHMARK_REGISTRY[k]["label"],
         )
         info = BENCHMARK_REGISTRY[bench_key]
-        st.caption(f"{info['description']}  —  Classes: **{', '.join(info['choices'])}**")
+        st.caption(f"{info['description']}  --  Classes: **{', '.join(info['choices'])}**")
 
-        if st.button("📥 Load benchmark dataset", key="load_bench"):
+        if st.button("Load benchmark dataset", key="load_bench"):
             with st.spinner(f"Loading {info['label']}..."):
                 task = load_task(bench_key, n_train=n_train, n_test=sample_size, seed=seed)
             st.session_state["lab_task"] = task
 
         if "lab_task" in st.session_state:
             task = st.session_state["lab_task"]
-            st.success(f"**{task.name}** loaded — {len(task.train_pool)} train, {len(task.test_set)} test examples")
+            st.success(f"**{task.name}** loaded -- {len(task.train_pool)} train, {len(task.test_set)} test examples")
     else:
         with st.form("custom_task_form"):
             task_name = st.text_input("Task name", placeholder="Spam Detection")
@@ -635,7 +636,7 @@ def page_benchmark_lab():
             try:
                 task = build_custom_task(task_name, task_instr, choices, task_examples, seed=seed)
                 st.session_state["lab_task"] = task
-                st.success(f"**{task.name}** built — {len(task.train_pool)} train, {len(task.test_set)} test")
+                st.success(f"**{task.name}** built -- {len(task.train_pool)} train, {len(task.test_set)} test")
             except ValueError as e:
                 st.error(str(e))
 
@@ -653,8 +654,8 @@ def page_benchmark_lab():
         st.warning("Select or enter an SLM model in the sidebar.")
         return
 
-    if st.button("🚀 Run Benchmark", type="primary", use_container_width=True, key="run_bench"):
-        from slm import load_model, generate_answer_generic
+    if st.button("Run Benchmark", type="primary", use_container_width=True, key="run_bench"):
+        from slm import generate_answer_generic
         from selector import RandomSelector, GenericLLMSelector
 
         progress = st.progress(0, text="Loading model...")
@@ -674,6 +675,7 @@ def page_benchmark_lab():
             llm_sel = GenericLLMSelector(
                 provider, llm_model, api_key,
                 task_instruction=task.instruction, task_choices=task.choices,
+                cache_dir=CACHE_DIR / "selector",
             )
 
         random_sel = RandomSelector()
@@ -741,7 +743,6 @@ def page_benchmark_lab():
         st.subheader("3. Results")
         cols = st.columns(len(accuracies))
         for col, (strat, acc) in zip(cols, accuracies.items()):
-            color = _COLORS.get(strat, "#6b7280")
             col.metric(strat, f"{acc:.1%}")
 
         import plotly.graph_objects as go
@@ -844,7 +845,7 @@ def page_benchmark_lab():
                 f"| Hybrid: LLM selector ({llm_used}) | "
                 f"{proj.selector_input_tpq:.0f} in + {proj.selector_output_tpq:.0f} out tokens | "
                 f"${proj.hybrid_llm_cost:,.2f} |\n"
-                f"| Hybrid: SLM hosting | — | ${proj.hybrid_hosting_cost:,.0f} |\n"
+                f"| Hybrid: SLM hosting | -- | ${proj.hybrid_hosting_cost:,.0f} |\n"
                 f"| **Hybrid total** | | **${proj.hybrid_total:,.2f}** |\n"
                 f"| **Savings** | | **${proj.savings_abs:,.2f} ({proj.savings_pct:.0f}%)** |"
             )
@@ -872,16 +873,34 @@ def page_distillation():
     st.markdown(
         "**Distilling Step-by-Step** (Hsieh et al., 2023): the teacher LLM generates "
         "labels *and* rationales, then the student SLM is LoRA-fine-tuned with a "
-        "multi-task loss:  `L = λ · L_label + (1-λ) · L_rationale`"
+        "multi-task loss:  `L = lambda * L_label + (1-lambda) * L_rationale`"
     )
 
     if not _ML:
-        st.warning("**Requires local dependencies** — PyTorch is not installed.")
-        st.markdown(
-            "```bash\n"
-            "pip install torch transformers datasets accelerate anthropic openai peft\n"
-            "```"
+        st.info(
+            "**Live distillation requires local hardware** (PyTorch + GPU/MPS). "
+            "Install with: `pip install torch transformers datasets accelerate anthropic openai peft`"
         )
+        st.markdown("---")
+        st.subheader("How Distillation Works")
+        st.markdown(
+            "1. **Teacher generates rationales** -- The LLM produces a label *and* a natural language "
+            "explanation for each training example\n"
+            "2. **Multi-task dataset** -- Examples are split into label-only and rationale+label tasks "
+            "at ratio lambda : (1-lambda)\n"
+            "3. **LoRA fine-tuning** -- The student SLM is fine-tuned with ~1-3% trainable parameters\n"
+            "4. **Evaluation** -- The distilled student is compared against its original zero-shot performance\n\n"
+            "**To run distillation online**, deploy this app to a "
+            "[HuggingFace Space](https://huggingface.co/spaces) with GPU (T4, free tier available). "
+            "A Dockerfile is included in this repo for one-click deployment."
+        )
+
+        # Show pre-computed distillation results if available
+        distill_results_path = DATA_DIR / "distillation_results.csv"
+        if distill_results_path.exists():
+            st.subheader("Pre-computed Distillation Results")
+            df = pd.read_csv(distill_results_path)
+            st.dataframe(df, use_container_width=True)
         return
 
     from tasks import BENCHMARK_REGISTRY, load_task
@@ -902,9 +921,9 @@ def page_distillation():
         api_key = st.text_input("API Key", type="password", key="dist_key")
         st.divider()
         st.subheader("Training")
-        lambda_w = st.slider("λ (label weight)", 0.0, 1.0, 0.5, 0.05,
+        lambda_w = st.slider("lambda (label weight)", 0.0, 1.0, 0.5, 0.05,
                              key="dist_lambda",
-                             help="λ=1.0 → only labels, λ=0.0 → only rationales")
+                             help="lambda=1.0 -> only labels, lambda=0.0 -> only rationales")
         epochs = st.slider("Epochs", 1, 10, 3, key="dist_epochs")
         lr = st.select_slider("Learning rate", [1e-5, 5e-5, 1e-4, 2e-4, 5e-4], value=2e-4, key="dist_lr")
         n_train = st.slider("Training examples", 10, 100, 30, key="dist_ntrain")
@@ -912,15 +931,15 @@ def page_distillation():
         seed = st.number_input("Seed", value=42, key="dist_seed")
 
     info = BENCHMARK_REGISTRY[bench_key]
-    st.caption(f"**{info['label']}** — {info['description']}  ·  Classes: {', '.join(info['choices'])}")
+    st.caption(f"**{info['label']}** -- {info['description']}  |  Classes: {', '.join(info['choices'])}")
 
     # ── Phase 1: Generate rationales ─────────────────────────────────────
-    st.subheader("Phase 1 — Teacher Rationale Generation")
+    st.subheader("Phase 1 -- Teacher Rationale Generation")
     st.markdown(
         "The teacher LLM produces a **label + natural language rationale** for each training example."
     )
 
-    if st.button("🧠 Generate Rationales", key="gen_rat"):
+    if st.button("Generate Rationales", key="gen_rat"):
         if not api_key:
             st.error("Enter an API key in the sidebar.")
             return
@@ -949,16 +968,16 @@ def page_distillation():
             for ex in annotated[:5]:
                 st.markdown(
                     f"**Q:** {ex.input_text[:120]}...\n\n"
-                    f"**Label:** {ex.label}  ·  **Rationale:** _{ex.rationale}_\n\n---"
+                    f"**Label:** {ex.label}  |  **Rationale:** _{ex.rationale}_\n\n---"
                 )
     else:
         st.info("Click above to generate rationales from the teacher LLM.")
         return
 
     # ── Phase 2: Evaluate baseline ───────────────────────────────────────
-    st.subheader("Phase 2 — Baseline (Original Student)")
+    st.subheader("Phase 2 -- Baseline (Original Student)")
 
-    if st.button("📏 Evaluate baseline (no distillation)", key="eval_base"):
+    if st.button("Evaluate baseline (no distillation)", key="eval_base"):
         from distill import evaluate_distilled
 
         task = st.session_state["dist_task"]
@@ -981,13 +1000,13 @@ def page_distillation():
         return
 
     # ── Phase 3: Fine-tune ───────────────────────────────────────────────
-    st.subheader("Phase 3 — LoRA Fine-Tuning")
+    st.subheader("Phase 3 -- LoRA Fine-Tuning")
     st.markdown(
-        f"Multi-task loss with **λ = {lambda_w}**: "
+        f"Multi-task loss with **lambda = {lambda_w}**: "
         f"{lambda_w:.0%} label prediction, {1-lambda_w:.0%} rationale generation."
     )
 
-    if st.button("🔥 Distill Student", type="primary", key="distill_btn"):
+    if st.button("Distill Student", type="primary", key="distill_btn"):
         from distill import DistillDataset, fine_tune_student
 
         task = st.session_state["dist_task"]
@@ -997,7 +1016,6 @@ def page_distillation():
 
         with st.status("Preparing dataset...", expanded=True) as status:
             st.write("Tokenizing multi-task training data...")
-            from slm import load_model as _lm
             _, tok_tmp, _ = _load_slm(slm)
 
             ds = DistillDataset(
@@ -1040,9 +1058,9 @@ def page_distillation():
         return
 
     # ── Phase 4: Evaluate distilled ──────────────────────────────────────
-    st.subheader("Phase 4 — Evaluate Distilled Student")
+    st.subheader("Phase 4 -- Evaluate Distilled Student")
 
-    if st.button("📊 Evaluate distilled model", key="eval_dist"):
+    if st.button("Evaluate distilled model", key="eval_dist"):
         from distill import evaluate_distilled
 
         task = st.session_state["dist_task"]
@@ -1080,17 +1098,16 @@ def page_distillation():
         fig.update_layout(
             template="plotly_white", height=350,
             yaxis_tickformat=".0%", yaxis_title="Accuracy",
-            title=f"Distillation Result (λ={lambda_w})",
+            title=f"Distillation Result (lambda={lambda_w})",
         )
         st.plotly_chart(fig, use_container_width=True)
 
         with st.expander("Loss function details"):
             st.markdown(
-                f"**Multi-task loss:** `L = λ · L_label + (1-λ) · L_rationale`\n\n"
-                f"- **λ = {lambda_w}** → {lambda_w:.0%} of training examples are label-only, "
+                f"**Multi-task loss:** `L = lambda * L_label + (1-lambda) * L_rationale`\n\n"
+                f"- **lambda = {lambda_w}** -> {lambda_w:.0%} of training examples are label-only, "
                 f"{1-lambda_w:.0%} are rationale+label\n"
-                f"- Implemented via **dataset mixing** (equivalent to explicit loss weighting "
-                f"in expectation)\n"
+                f"- Implemented via **deterministic stratified dataset mixing**\n"
                 f"- **LoRA** adapters fine-tuned (~1-3% of parameters)\n"
                 f"- Standard **cross-entropy** on response tokens (prompt tokens masked with -100)"
             )
@@ -1106,10 +1123,111 @@ def page_savings():
 
     st.title("Your Savings Calculator")
     st.markdown(
-        "Estimate how much you could save by replacing direct LLM API calls "
-        "with a hybrid approach: a small local model + intelligent example selection."
+        "**How much could you save?** Estimate the impact of replacing direct LLM API calls "
+        "with a hybrid approach: an LLM picks the right examples, a small local model does the work. "
+        "Accuracy differences are factored into the real cost."
     )
 
+    # ── Step 0: Optional — test with your own examples ───────────────────
+    with st.expander("Optional: measure accuracy on your own examples", expanded=False):
+        st.markdown(
+            "Paste your own task examples below to get a **measured hybrid accuracy** "
+            "instead of a guess. This feeds directly into the cost model."
+        )
+
+        if _ML:
+            from tasks import build_custom_task, TaskExample
+            from slm import generate_answer_generic
+            from selector import RandomSelector, GenericLLMSelector
+
+            with st.form("savings_custom_task"):
+                sav_task_name = st.text_input("Task name", value="My Task", key="sav_task_name")
+                sav_task_instr = st.text_area("Instruction", placeholder="Classify whether this email is spam or legitimate.", key="sav_task_instr")
+                sav_task_choices = st.text_input("Answer choices (comma-separated)", placeholder="spam, legitimate", key="sav_task_choices")
+                sav_task_examples = st.text_area(
+                    "Examples (one per line: `input text ||| label`). Need at least 10 for meaningful results.",
+                    height=200,
+                    placeholder="Buy now, limited offer!!! ||| spam\nHi, meeting at 3pm tomorrow ||| legitimate\n...",
+                    key="sav_task_examples",
+                )
+                sav_slm = st.selectbox("SLM model", _SLM_OPTIONS[:3], format_func=_short, key="sav_slm")
+                sav_provider = st.selectbox("LLM provider", ["openai", "anthropic"], key="sav_test_provider")
+                sav_llm = st.text_input("LLM model", value="gpt-4o-mini" if sav_provider == "openai" else "claude-haiku-4-5", key="sav_test_llm")
+                sav_api_key = st.text_input("API key", type="password", key="sav_test_key")
+                sav_submitted = st.form_submit_button("Run quick benchmark on my examples")
+
+            if sav_submitted and sav_task_instr and sav_task_choices and sav_task_examples:
+                choices = [c.strip() for c in sav_task_choices.split(",") if c.strip()]
+                try:
+                    task = build_custom_task(sav_task_name, sav_task_instr, choices,
+                                             sav_task_examples, train_ratio=0.6, seed=42)
+                except ValueError as e:
+                    st.error(str(e))
+                    task = None
+
+                if task and len(task.test_set) >= 2:
+                    model, tokenizer, device = _load_slm(sav_slm)
+                    n = len(task.test_set)
+                    progress = st.progress(0, text="Evaluating...")
+
+                    zs_correct, llm_correct, rand_correct = 0, 0, 0
+                    random_sel = RandomSelector()
+                    llm_sel = None
+                    if sav_api_key:
+                        llm_sel = GenericLLMSelector(
+                            sav_provider, sav_llm, sav_api_key,
+                            task_instruction=task.instruction, task_choices=task.choices,
+                            cache_dir=CACHE_DIR / "selector",
+                        )
+
+                    for i, ex in enumerate(task.test_set):
+                        progress.progress((i + 1) / n, text=f"Question {i+1}/{n}...")
+                        # Zero-shot
+                        ans, _, _ = generate_answer_generic(
+                            model, tokenizer, device,
+                            task.instruction, task.choices, ex.input_text, ex.context, [],
+                        )
+                        zs_correct += int(ans == ex.correct)
+                        # Random
+                        shots = random_sel.select(task.train_pool, ex, 3, seed=42 + i)
+                        ans, _, _ = generate_answer_generic(
+                            model, tokenizer, device,
+                            task.instruction, task.choices, ex.input_text, ex.context, shots,
+                        )
+                        rand_correct += int(ans == ex.correct)
+                        # LLM-assisted
+                        if llm_sel:
+                            shots = llm_sel.select(task.train_pool, ex, 3, seed=42 + i)
+                            ans, _, _ = generate_answer_generic(
+                                model, tokenizer, device,
+                                task.instruction, task.choices, ex.input_text, ex.context, shots,
+                            )
+                            llm_correct += int(ans == ex.correct)
+
+                    progress.progress(1.0, text="Done!")
+
+                    zs_acc = zs_correct / n
+                    rand_acc = rand_correct / n
+                    llm_acc = llm_correct / n if llm_sel else rand_acc
+
+                    r1, r2, r3 = st.columns(3)
+                    r1.metric("Zero-Shot", f"{zs_acc:.0%}")
+                    r2.metric("Random", f"{rand_acc:.0%}")
+                    r3.metric("LLM-Assisted", f"{llm_acc:.0%}")
+
+                    best_hybrid = max(rand_acc, llm_acc)
+                    st.session_state["sav_measured_acc"] = best_hybrid
+                    st.success(
+                        f"Measured best hybrid accuracy: **{best_hybrid:.0%}** "
+                        f"on {n} test examples. This is now used in the cost model below."
+                    )
+        else:
+            st.info(
+                "Install inference dependencies to test with your own examples: "
+                "`pip install torch transformers datasets accelerate openai anthropic`"
+            )
+
+    # ── Step 1: Your current LLM setup ───────────────────────────────────
     st.subheader("1. Your current LLM setup")
     c1, c2 = st.columns(2)
     direct_model = c1.selectbox(
@@ -1158,6 +1276,8 @@ def page_savings():
     st.metric("Your current monthly LLM spend", f"${current_monthly:,.2f}")
 
     st.divider()
+
+    # ── Step 2: Hybrid configuration ─────────────────────────────────────
     st.subheader("2. Hybrid configuration")
 
     h1, h2 = st.columns(2)
@@ -1186,11 +1306,20 @@ def page_savings():
         key="sav_sel_out",
         help="~60 tokens for the selector's response (JSON indices).",
     )
+
+    # Use measured accuracy if available from the custom benchmark
+    measured_acc = st.session_state.get("sav_measured_acc")
+    default_hybrid_acc = measured_acc if measured_acc else 0.65
+    hybrid_acc_help = (
+        "Measured from your examples above."
+        if measured_acc
+        else "Run a benchmark to measure this. Typical: 55-70% for small models with good example selection."
+    )
     hybrid_acc = st.slider(
         "Expected hybrid accuracy",
-        0.3, 1.0, 0.65, 0.01,
+        0.3, 1.0, default_hybrid_acc, 0.01,
         key="sav_hybrid_acc",
-        help="Run a benchmark to measure this. Typical: 55-70% for small models with good example selection.",
+        help=hybrid_acc_help,
     )
 
     hosting_keys = [k for k in SLM_HOSTING if k != "custom"] + ["custom"]
@@ -1208,6 +1337,8 @@ def page_savings():
         )
 
     st.divider()
+
+    # ── Step 3: Results ──────────────────────────────────────────────────
     st.subheader("3. Results")
 
     proj = project_monthly(
@@ -1224,28 +1355,146 @@ def page_savings():
         hybrid_accuracy=hybrid_acc,
     )
 
+    # ── Primary view: accuracy-adjusted ──────────────────────────────────
+    acc_delta = hybrid_acc - direct_acc
+
+    view = st.radio(
+        "Cost view",
+        ["Raw cost", "Accuracy-adjusted", "With error routing"],
+        horizontal=True,
+        help=(
+            "**Raw cost**: total spend ignoring accuracy differences. "
+            "**Accuracy-adjusted**: cost per correct answer, normalized. "
+            "**With error routing**: assumes hybrid misses are re-sent to the LLM."
+        ),
+    )
+
+    if view == "Raw cost":
+        h_cost = proj.hybrid_total
+        h_savings = proj.savings_abs
+        h_pct = proj.savings_pct
+        view_note = ""
+    elif view == "Accuracy-adjusted":
+        h_cost = proj.hybrid_total  # raw cost is the same, but we show per-correct
+        h_savings = proj.adjusted_savings_abs
+        h_pct = proj.adjusted_savings_pct
+        view_note = f"Comparing cost to produce **{int(monthly_vol * direct_acc):,}** correct answers"
+    else:  # With error routing
+        h_cost = proj.hybrid_total_with_errors
+        h_savings = proj.savings_with_errors_abs
+        h_pct = proj.savings_with_errors_pct
+        view_note = (
+            f"Assumes {(1 - hybrid_acc):.0%} of hybrid answers are wrong and get "
+            f"re-routed to {direct_model} (+${proj.error_routing_cost:,.2f}/mo)"
+        )
+
+    if view_note:
+        st.caption(view_note)
+
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Current spend", f"${proj.pure_llm_cost:,.2f}/mo")
-    m2.metric("Hybrid cost", f"${proj.hybrid_total:,.2f}/mo")
-    m3.metric("Monthly savings", f"${proj.savings_abs:,.2f}", f"{proj.savings_pct:.0f}%")
-    m4.metric("Annual savings", f"${proj.savings_abs * 12:,.0f}")
+    m2.metric("Hybrid cost", f"${h_cost:,.2f}/mo")
+    savings_sign = "+" if h_savings >= 0 else ""
+    m3.metric("Monthly savings", f"${h_savings:,.2f}", f"{h_pct:.0f}%")
+    m4.metric("Annual savings", f"${h_savings * 12:,.0f}")
 
     import plotly.graph_objects as go
+
     fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=["Current (pure LLM)", "Hybrid (David vs Goliath)"],
-        y=[proj.pure_llm_cost, proj.hybrid_total],
-        marker_color=["#ef4444", "#10b981"],
-        text=[f"${proj.pure_llm_cost:,.2f}", f"${proj.hybrid_total:,.2f}"],
-        textposition="outside",
-    ))
+    bars_x = ["Current (pure LLM)"]
+    bars_y = [proj.pure_llm_cost]
+    bars_color = ["#ef4444"]
+    bars_text = [f"${proj.pure_llm_cost:,.2f}"]
+
+    if view == "With error routing" and proj.error_routing_cost > 0:
+        # Stacked bar: hybrid base + error routing cost
+        fig.add_trace(go.Bar(
+            x=["Hybrid (David vs Goliath)"], y=[proj.hybrid_total],
+            name="Hybrid base", marker_color="#10b981",
+            text=[f"${proj.hybrid_total:,.2f}"], textposition="inside",
+        ))
+        fig.add_trace(go.Bar(
+            x=["Hybrid (David vs Goliath)"], y=[proj.error_routing_cost],
+            name="Error routing", marker_color="#f59e0b",
+            text=[f"+${proj.error_routing_cost:,.2f}"], textposition="inside",
+        ))
+        fig.add_trace(go.Bar(
+            x=["Current (pure LLM)"], y=[proj.pure_llm_cost],
+            name="Pure LLM", marker_color="#ef4444",
+            text=[f"${proj.pure_llm_cost:,.2f}"], textposition="outside",
+        ))
+        fig.update_layout(barmode="stack")
+    else:
+        fig.add_trace(go.Bar(
+            x=["Current (pure LLM)", "Hybrid (David vs Goliath)"],
+            y=[proj.pure_llm_cost, h_cost],
+            marker_color=["#ef4444", "#10b981"],
+            text=[f"${proj.pure_llm_cost:,.2f}", f"${h_cost:,.2f}"],
+            textposition="outside",
+        ))
+
     fig.update_layout(
-        template="plotly_white", height=350,
+        template="plotly_white", height=380,
         yaxis_title="Monthly Cost ($)", title="Cost Comparison",
+        showlegend=(view == "With error routing"),
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    with st.expander("Detailed breakdown"):
+    # ── Accuracy-adjusted detail ─────────────────────────────────────────
+    st.subheader("4. The accuracy picture")
+
+    if acc_delta < 0:
+        st.markdown(
+            f"The hybrid is **{abs(acc_delta):.0%} less accurate** ({hybrid_acc:.0%} vs {direct_acc:.0%}). "
+            f"That accuracy gap has a real cost:"
+        )
+    elif acc_delta == 0:
+        st.markdown(f"Both approaches have the same accuracy ({direct_acc:.0%}).")
+    else:
+        st.success(
+            f"The hybrid is **{acc_delta:.0%} more accurate** AND cheaper. No trade-off needed."
+        )
+
+    acc_c1, acc_c2, acc_c3 = st.columns(3)
+    acc_c1.metric(f"Cost per 1K correct ({direct_model})",
+                  f"${proj.direct_cost_per_correct:,.4f}")
+    acc_c2.metric("Cost per 1K correct (hybrid)",
+                  f"${proj.hybrid_cost_per_correct:,.4f}")
+    if proj.hybrid_cost_per_correct > 0:
+        cpc_ratio = proj.direct_cost_per_correct / proj.hybrid_cost_per_correct
+        acc_c3.metric("Efficiency ratio", f"{cpc_ratio:.1f}x",
+                      "hybrid is cheaper per correct answer" if cpc_ratio > 1 else "LLM is cheaper per correct answer")
+
+    if acc_delta < 0:
+        st.markdown("##### What happens to the wrong answers?")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown(
+                f"**Option A: Accept errors**\n\n"
+                f"- Monthly errors: **{int(monthly_vol * (1 - hybrid_acc)):,}**\n"
+                f"- Raw savings: **${proj.savings_abs:,.2f}/mo**\n"
+                f"- You save money but lose accuracy"
+            )
+        with col_b:
+            st.markdown(
+                f"**Option B: Route errors to LLM**\n\n"
+                f"- Re-process {(1 - hybrid_acc):.0%} of calls via {direct_model}\n"
+                f"- Error routing cost: **${proj.error_routing_cost:,.2f}/mo**\n"
+                f"- Net savings: **${proj.savings_with_errors_abs:,.2f}/mo ({proj.savings_with_errors_pct:.0f}%)**"
+            )
+        if proj.savings_with_errors_abs > 0:
+            st.info(
+                f"Even routing all errors back to {direct_model}, "
+                f"you still save **${proj.savings_with_errors_abs:,.2f}/mo**."
+            )
+        elif proj.savings_with_errors_abs <= 0:
+            st.warning(
+                f"With error routing, the hybrid is **more expensive** by "
+                f"${abs(proj.savings_with_errors_abs):,.2f}/mo. "
+                f"You need higher hybrid accuracy or a cheaper selector to make this work."
+            )
+
+    with st.expander("Full cost breakdown"):
         st.markdown(
             f"| | Per Question | Monthly ({monthly_vol:,} calls) |\n"
             f"|---|---|---|\n"
@@ -1253,39 +1502,26 @@ def page_savings():
             f"**${proj.pure_llm_cost:,.2f}** |\n"
             f"| Hybrid: Selector ({selector_model}) | {sel_in} in + {sel_out} out tokens | "
             f"${proj.hybrid_llm_cost:,.2f} |\n"
-            f"| Hybrid: SLM hosting | — | ${proj.hybrid_hosting_cost:,.0f} |\n"
-            f"| **Hybrid total** | | **${proj.hybrid_total:,.2f}** |\n"
+            f"| Hybrid: SLM hosting | -- | ${proj.hybrid_hosting_cost:,.0f} |\n"
+            f"| **Hybrid total (raw)** | | **${proj.hybrid_total:,.2f}** |\n"
+            f"| Error routing ({(1 - hybrid_acc):.0%} of {monthly_vol:,}) | | "
+            f"${proj.error_routing_cost:,.2f} |\n"
+            f"| **Hybrid total (with error routing)** | | "
+            f"**${proj.hybrid_total_with_errors:,.2f}** |"
         )
         if proj.break_even_volume > 0:
-            st.info(f"Break-even at **{proj.break_even_volume:,}** calls/month.")
-
-    with st.expander("Accuracy comparison"):
-        delta = hybrid_acc - direct_acc
-        st.markdown(
-            f"| Approach | Accuracy | Delta |\n"
-            f"|---|---|---|\n"
-            f"| Current LLM ({direct_model}) | {direct_acc:.0%} | — |\n"
-            f"| Hybrid (David vs Goliath) | {hybrid_acc:.0%} | {delta:+.0%} |"
-        )
-        if delta < 0:
-            st.warning(
-                f"The hybrid approach is **{abs(delta):.0%} less accurate** but "
-                f"**${proj.savings_abs:,.2f}/mo cheaper**. "
-                f"Cost per accuracy point saved: ${abs(proj.savings_abs / (delta * 100)):,.2f}/mo per %."
-            )
-        else:
-            st.success("The hybrid approach is both cheaper AND more accurate.")
+            st.info(f"Break-even at **{proj.break_even_volume:,}** calls/month to cover hosting costs.")
 
 
 # ── Route ────────────────────────────────────────────────────────────────────
 
-if page == "📊 Dashboard":
+if page == "Dashboard":
     page_dashboard()
-elif page == "🔬 Live Demo":
+elif page == "Live Demo":
     page_live_demo()
-elif page == "🧪 Benchmark Lab":
+elif page == "Benchmark Lab":
     page_benchmark_lab()
-elif page == "🎓 Distillation":
+elif page == "Distillation":
     page_distillation()
 else:
     page_savings()

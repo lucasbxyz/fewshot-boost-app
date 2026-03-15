@@ -8,11 +8,25 @@ All costs are token-based.  Users can override every assumption.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import logging
+import warnings
+from dataclasses import dataclass
+from datetime import date
+from pathlib import Path
 from typing import Any
 
-# Prices per 1 million tokens (USD), March 2025.
-LLM_PRICING: dict[str, dict[str, float]] = {
+import yaml
+
+log = logging.getLogger(__name__)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Pricing tables — loaded from config.yaml if available, else defaults
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_PRICING_UPDATED = "2025-03"
+
+# Prices per 1 million tokens (USD).
+_DEFAULT_LLM_PRICING: dict[str, dict[str, float]] = {
     "gpt-4o": {"input": 2.50, "output": 10.00},
     "gpt-4o-mini": {"input": 0.15, "output": 0.60},
     "gpt-4.1-mini": {"input": 0.40, "output": 1.60},
@@ -21,13 +35,51 @@ LLM_PRICING: dict[str, dict[str, float]] = {
     "claude-sonnet-4-20250514": {"input": 3.00, "output": 15.00},
 }
 
-SLM_HOSTING: dict[str, dict[str, Any]] = {
+_DEFAULT_SLM_HOSTING: dict[str, dict[str, Any]] = {
     "self_hosted_cpu": {"monthly": 0, "label": "Own hardware (CPU) — free"},
     "cloud_cpu": {"monthly": 30, "label": "Cloud CPU instance (~$30/mo)"},
     "hf_inference_cpu": {"monthly": 45, "label": "HF Endpoints CPU ($0.06/hr)"},
     "hf_inference_gpu": {"monthly": 450, "label": "HF Endpoints GPU ($0.60/hr)"},
     "custom": {"monthly": 0, "label": "Custom (enter your own)"},
 }
+
+
+def _load_config(config_path: Path | None = None) -> dict:
+    """Attempt to load config.yaml from project root."""
+    if config_path is None:
+        config_path = Path(__file__).parent / "config.yaml"
+    if config_path.exists():
+        try:
+            with open(config_path) as f:
+                return yaml.safe_load(f) or {}
+        except Exception as e:
+            log.warning("Failed to load config.yaml: %s", e)
+    return {}
+
+
+def _check_pricing_staleness():
+    """Warn if pricing data is more than 6 months old."""
+    try:
+        updated = date.fromisoformat(f"{_PRICING_UPDATED}-01")
+        age_days = (date.today() - updated).days
+        if age_days > 180:
+            warnings.warn(
+                f"LLM pricing data was last updated {_PRICING_UPDATED} "
+                f"({age_days} days ago). Prices may be outdated. "
+                f"Update the pricing tables in pricing.py or config.yaml.",
+                UserWarning,
+                stacklevel=3,
+            )
+    except Exception:
+        pass
+
+
+# Initialize on import
+_config = _load_config()
+_check_pricing_staleness()
+
+LLM_PRICING: dict[str, dict[str, float]] = _config.get("llm_pricing", _DEFAULT_LLM_PRICING)
+SLM_HOSTING: dict[str, dict[str, Any]] = _config.get("slm_hosting", _DEFAULT_SLM_HOSTING)
 
 
 def get_model_price(model: str) -> dict[str, float]:
@@ -87,7 +139,7 @@ class CostProjection:
     selector_input_tpq: float = 0.0
     selector_output_tpq: float = 0.0
 
-    # Costs
+    # Costs (raw)
     pure_llm_cost: float = 0.0
     hybrid_llm_cost: float = 0.0
     hybrid_hosting_cost: float = 0.0
@@ -98,6 +150,18 @@ class CostProjection:
     # Accuracy
     direct_accuracy: float = 0.0
     hybrid_accuracy: float = 0.0
+
+    # Accuracy-adjusted costs (cost per correct answer * volume)
+    direct_cost_per_correct: float = 0.0
+    hybrid_cost_per_correct: float = 0.0
+    adjusted_savings_abs: float = 0.0
+    adjusted_savings_pct: float = 0.0
+
+    # Error handling: cost of routing misses back to the LLM
+    error_routing_cost: float = 0.0
+    hybrid_total_with_errors: float = 0.0
+    savings_with_errors_abs: float = 0.0
+    savings_with_errors_pct: float = 0.0
 
     # Break-even
     break_even_volume: int = 0
@@ -177,6 +241,27 @@ def project_monthly(
     marginal_saving = direct_cost_per_q - hybrid_cost_per_q
     break_even = int(hosting_monthly / marginal_saving) if marginal_saving > 0 else 0
 
+    # ── Accuracy-adjusted economics ──────────────────────────────────────
+    # Cost per correct answer: what you actually pay for each *right* answer
+    d_cpc = (pure_llm_cost / (monthly_volume * direct_accuracy)) if direct_accuracy > 0 else 0.0
+    h_cpc = (hybrid_total / (monthly_volume * hybrid_accuracy)) if hybrid_accuracy > 0 else 0.0
+
+    # Adjusted savings: comparing cost to get the same number of correct answers
+    # = monthly_volume * direct_accuracy correct answers needed
+    correct_needed = monthly_volume * direct_accuracy
+    direct_cost_for_correct = correct_needed * d_cpc
+    hybrid_cost_for_correct = correct_needed * h_cpc
+    adj_savings = direct_cost_for_correct - hybrid_cost_for_correct
+    adj_savings_pct = (adj_savings / direct_cost_for_correct * 100) if direct_cost_for_correct > 0 else 0.0
+
+    # Error routing: assume hybrid misses get escalated back to the direct LLM
+    error_rate = max(0.0, 1.0 - hybrid_accuracy)
+    error_volume = monthly_volume * error_rate
+    error_cost = error_volume * direct_cost_per_q
+    hybrid_with_errors = hybrid_total + error_cost
+    savings_we_abs = pure_llm_cost - hybrid_with_errors
+    savings_we_pct = (savings_we_abs / pure_llm_cost * 100) if pure_llm_cost > 0 else 0.0
+
     return CostProjection(
         monthly_volume=monthly_volume,
         direct_model=direct_model,
@@ -194,6 +279,14 @@ def project_monthly(
         savings_pct=round(savings_pct, 1),
         direct_accuracy=direct_accuracy,
         hybrid_accuracy=hybrid_accuracy,
+        direct_cost_per_correct=round(d_cpc * 1000, 4),   # per 1K correct
+        hybrid_cost_per_correct=round(h_cpc * 1000, 4),   # per 1K correct
+        adjusted_savings_abs=round(adj_savings, 2),
+        adjusted_savings_pct=round(adj_savings_pct, 1),
+        error_routing_cost=round(error_cost, 2),
+        hybrid_total_with_errors=round(hybrid_with_errors, 2),
+        savings_with_errors_abs=round(savings_we_abs, 2),
+        savings_with_errors_pct=round(savings_we_pct, 1),
         break_even_volume=break_even,
     )
 

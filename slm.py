@@ -1,23 +1,24 @@
 """Small Language Model loading and inference.
 
 Loads HuggingFace instruction-tuned models, applies the chat template,
-and runs inference with MPS acceleration on Apple Silicon (CPU fallback).
+and runs inference with CUDA / MPS acceleration (CPU fallback).
 """
 
+from __future__ import annotations
+
+import logging
 from typing import List
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from benchmark import BoolQExample
+log = logging.getLogger(__name__)
 
 
 def _get_device() -> torch.device:
-    """Select the best available device.
-
-    Returns:
-        torch.device – MPS on Apple Silicon, else CPU.
-    """
+    """Select the best available device: CUDA → MPS → CPU."""
+    if torch.cuda.is_available():
+        return torch.device("cuda")
     if torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
@@ -34,9 +35,10 @@ def load_model(model_name: str) -> tuple:
         (model, tokenizer, device) tuple ready for inference.
     """
     device = _get_device()
-    dtype = torch.float32  # MPS does not support float16 reliably
+    # float16 works on CUDA; MPS and CPU need float32
+    dtype = torch.float16 if device.type == "cuda" else torch.float32
 
-    print(f"  Loading {model_name} on {device} (dtype={dtype})...")
+    log.info("Loading %s on %s (dtype=%s)...", model_name, device, dtype)
 
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -58,118 +60,6 @@ def load_model(model_name: str) -> tuple:
         tokenizer.pad_token = tokenizer.eos_token
 
     return model, tokenizer, device
-
-
-def build_prompt(test_example: BoolQExample,
-                 shots: List[BoolQExample]) -> List[dict]:
-    """Build a chat-format prompt with few-shot demonstrations.
-
-    Constructs a list of message dicts suitable for apply_chat_template.
-
-    Args:
-        test_example: The question to answer.
-        shots: Few-shot demonstration examples.
-
-    Returns:
-        List of message dicts with 'role' and 'content' keys.
-    """
-    system_msg = (
-        "You are a helpful assistant that answers yes/no questions based on "
-        "a given passage. Reply with exactly one word: yes or no."
-    )
-
-    messages = [{"role": "system", "content": system_msg}]
-
-    for ex in shots:
-        label = "yes" if ex.answer else "no"
-        messages.append({
-            "role": "user",
-            "content": f"Passage: {ex.passage}\n\nQuestion: {ex.question}",
-        })
-        messages.append({
-            "role": "assistant",
-            "content": label,
-        })
-
-    messages.append({
-        "role": "user",
-        "content": (
-            f"Passage: {test_example.passage}\n\n"
-            f"Question: {test_example.question}"
-        ),
-    })
-
-    return messages
-
-
-def normalize_answer(raw: str) -> str:
-    """Normalize SLM output to 'yes', 'no', or 'INVALID'.
-
-    Strips whitespace, lowercases, takes the first token, and maps it.
-    Unmappable outputs return 'INVALID'.
-
-    Args:
-        raw: Raw text output from the SLM.
-
-    Returns:
-        'yes', 'no', or 'INVALID'.
-    """
-    text = raw.strip().lower()
-    if not text:
-        return "INVALID"
-
-    first_token = text.split()[0].strip(".,!?;:'\"")
-
-    if first_token in ("yes", "true"):
-        return "yes"
-    if first_token in ("no", "false"):
-        return "no"
-    return "INVALID"
-
-
-def generate_answer(model, tokenizer, device,
-                    test_example: BoolQExample,
-                    shots: List[BoolQExample]) -> tuple:
-    """Generate a yes/no answer from the SLM.
-
-    Applies the chat template, runs greedy generation, and normalizes the
-    output.
-
-    Args:
-        model: Loaded HuggingFace model.
-        tokenizer: Corresponding tokenizer.
-        device: Torch device the model lives on.
-        test_example: The question to answer.
-        shots: Few-shot demonstration examples.
-
-    Returns:
-        Tuple of (normalized_answer, raw_answer) where normalized_answer is
-        'yes', 'no', or 'INVALID' and raw_answer is the decoded model output.
-    """
-    messages = build_prompt(test_example, shots)
-
-    prompt_text = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True,
-    )
-
-    inputs = tokenizer(prompt_text, return_tensors="pt").to(device)
-    input_len = inputs["input_ids"].shape[1]
-
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=10,
-            do_sample=False,
-            temperature=1.0,
-            pad_token_id=tokenizer.pad_token_id,
-        )
-
-    new_tokens = outputs[0][input_len:]
-    raw_answer = tokenizer.decode(new_tokens, skip_special_tokens=True)
-
-    return normalize_answer(raw_answer), raw_answer
 
 
 # ── Generic task support ─────────────────────────────────────────────────────
@@ -241,7 +131,6 @@ def generate_answer_generic(model, tokenizer, device,
             **inputs,
             max_new_tokens=10,
             do_sample=False,
-            temperature=1.0,
             pad_token_id=tokenizer.pad_token_id,
         )
 

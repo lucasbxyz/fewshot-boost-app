@@ -3,13 +3,14 @@
 Loads the BoolQ benchmark from HuggingFace, samples a training pool and
 test set with deterministic seeding, and derives a category from the
 passage title when available.
+
+NOTE: This module is kept for backward compatibility.  New code should use
+tasks.py (TaskExample / Task) instead of BoolQExample.
 """
 
 import random
 from dataclasses import dataclass
 from typing import List
-
-from datasets import load_dataset
 
 
 @dataclass
@@ -72,6 +73,8 @@ def load_boolq(n_train: int, n_test: int, seed: int) -> tuple:
     Raises:
         ValueError: If requested sizes exceed available data.
     """
+    from datasets import load_dataset
+
     ds = load_dataset("google/boolq")
 
     train_split = ds["train"]

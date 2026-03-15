@@ -9,7 +9,9 @@ Usage:
     dvg results                Show pre-computed results
 """
 
+import csv
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import typer
@@ -21,6 +23,8 @@ from rich import box
 
 APP_DIR = Path(__file__).parent
 DATA_DIR = APP_DIR / "data"
+RESULTS_DIR = APP_DIR / "results"
+CACHE_DIR = APP_DIR / "cache"
 
 console = Console()
 app = typer.Typer(
@@ -35,7 +39,7 @@ LOGO = r"""
    | |) / _` \ V / / _` | \ V (_-<    | (_ / _ \ | | |/ _` |  _| ' \
    |___/\__,_|\_/|_\__,_|  \_//__/     \___\___/ |_|_|\__,_|\__|_||_|[/bold cyan]
 """
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 
 def _banner():
@@ -55,6 +59,25 @@ SLM_PRESETS = [
 ]
 
 
+def _save_run_results(benchmark: str, slm: str, llm_model: str,
+                      accuracies: dict, n_questions: int, seed: int):
+    """Persist benchmark results to results/ as CSV."""
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = RESULTS_DIR / "run_history.csv"
+    write_header = not path.exists()
+    with open(path, "a", newline="") as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow([
+                "timestamp", "benchmark", "slm_model", "llm_model",
+                "n_questions", "seed", "strategy", "accuracy",
+            ])
+        ts = datetime.now().isoformat(timespec="seconds")
+        for strat, acc in accuracies.items():
+            writer.writerow([ts, benchmark, slm, llm_model, n_questions, seed, strat, f"{acc:.4f}"])
+    console.print(f"  [dim]Results saved to {path}[/dim]")
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Interactive wizard
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -69,12 +92,13 @@ def _interactive():
     action = inquirer.select(
         message="What would you like to do?",
         choices=[
-            {"name": "🚀 Run Benchmark", "value": "run"},
-            {"name": "⚡ Quick Demo (single question)", "value": "demo"},
-            {"name": "🎓 Distill (LoRA fine-tune with rationales)", "value": "distill"},
-            {"name": "💰 Cost Calculator", "value": "cost"},
-            {"name": "📊 View Pre-computed Results", "value": "results"},
-            {"name": "👋 Exit", "value": "exit"},
+            {"name": "Showcase (highlight reel demo)", "value": "showcase"},
+            {"name": "Run Benchmark", "value": "run"},
+            {"name": "Quick Demo (single question)", "value": "demo"},
+            {"name": "Distill (LoRA fine-tune with rationales)", "value": "distill"},
+            {"name": "Cost Calculator", "value": "cost"},
+            {"name": "View Pre-computed Results", "value": "results"},
+            {"name": "Exit", "value": "exit"},
         ],
     ).execute()
 
@@ -83,6 +107,22 @@ def _interactive():
 
     if action == "results":
         _cmd_results()
+        return
+
+    if action == "showcase":
+        provider = inquirer.select("LLM provider:", choices=["openai", "anthropic"]).execute()
+        default_llm = "gpt-4o-mini" if provider == "openai" else "claude-haiku-4-5"
+        llm_model = inquirer.text("LLM model name:", default=default_llm).execute()
+        import os
+        env_key_sc = os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or ""
+        api_key_sc = inquirer.secret("API key:", default=env_key_sc).execute()
+        slm_sc = inquirer.select(
+            "Select SLM model:",
+            choices=[{"name": _short(s), "value": s} for s in SLM_PRESETS],
+        ).execute()
+        n_q = int(inquirer.number("Questions to evaluate:", default=30, min_allowed=10, max_allowed=100).execute())
+        _cmd_showcase(slm=slm_sc, llm_provider=provider, llm_model=llm_model,
+                      api_key=api_key_sc, n_questions=n_q)
         return
 
     if action == "cost":
@@ -201,11 +241,11 @@ def _cmd_run(*, slm, benchmark, llm_provider, llm_model, api_key, shots, sample_
 
     with console.status("[bold green]Loading benchmark dataset..."):
         task = load_task(benchmark, n_train=50, n_test=sample_size, seed=seed)
-    console.print(f"  ✓ {task.name}: {len(task.train_pool)} train, {len(task.test_set)} test\n")
+    console.print(f"  {task.name}: {len(task.train_pool)} train, {len(task.test_set)} test\n")
 
     with console.status(f"[bold green]Loading {_short(slm)}..."):
         model, tokenizer, device = load_model(slm)
-    console.print(f"  ✓ Model loaded on {device}\n")
+    console.print(f"  Model loaded on {device}\n")
 
     strategies = ["Zero-Shot", "Random"]
     llm_sel = None
@@ -214,6 +254,7 @@ def _cmd_run(*, slm, benchmark, llm_provider, llm_model, api_key, shots, sample_
         llm_sel = GenericLLMSelector(
             llm_provider, llm_model, api_key,
             task_instruction=task.instruction, task_choices=task.choices,
+            cache_dir=CACHE_DIR / "selector",
         )
 
     random_sel = RandomSelector()
@@ -276,6 +317,9 @@ def _cmd_run(*, slm, benchmark, llm_provider, llm_model, api_key, shots, sample_
         color = "green" if acc >= max(accuracies.values()) else "white"
         table.add_row(strat, f"[{color}]{acc:.1%}[/{color}]", f"{n_correct}/{len(results[strat])}")
     console.print(table)
+
+    # Persist results
+    _save_run_results(benchmark, slm, llm_model, accuracies, len(task.test_set), seed)
 
     # Cost estimation (token-based, from measured data)
     if llm_sel:
@@ -361,7 +405,7 @@ def _cmd_demo(*, slm, llm_provider, llm_model, api_key, shots=3, seed=42):
             task.instruction, task.choices,
             test_ex.input_text, test_ex.context, [],
         )
-    mark = "✅" if ans_zs == test_ex.correct else "❌"
+    mark = "+" if ans_zs == test_ex.correct else "x"
     panels.append(Panel(f"{mark} [bold]{ans_zs}[/bold]\n[dim]Raw: {raw_zs.strip()[:50]}[/dim]",
                         title="Zero-Shot", border_style="white"))
 
@@ -373,7 +417,7 @@ def _cmd_demo(*, slm, llm_provider, llm_model, api_key, shots=3, seed=42):
             task.instruction, task.choices,
             test_ex.input_text, test_ex.context, r_shots,
         )
-    mark = "✅" if ans_r == test_ex.correct else "❌"
+    mark = "+" if ans_r == test_ex.correct else "x"
     panels.append(Panel(f"{mark} [bold]{ans_r}[/bold]\n[dim]{shots} random examples[/dim]",
                         title="Random", border_style="yellow"))
 
@@ -383,6 +427,7 @@ def _cmd_demo(*, slm, llm_provider, llm_model, api_key, shots=3, seed=42):
             llm_sel = GenericLLMSelector(
                 llm_provider, llm_model, api_key,
                 task_instruction=task.instruction, task_choices=task.choices,
+                cache_dir=CACHE_DIR / "selector",
             )
             l_shots = llm_sel.select(task.train_pool, test_ex, shots, seed=seed)
         with console.status("LLM-Assisted inference..."):
@@ -391,7 +436,7 @@ def _cmd_demo(*, slm, llm_provider, llm_model, api_key, shots=3, seed=42):
                 task.instruction, task.choices,
                 test_ex.input_text, test_ex.context, l_shots,
             )
-        mark = "✅" if ans_l == test_ex.correct else "❌"
+        mark = "+" if ans_l == test_ex.correct else "x"
         panels.append(Panel(f"{mark} [bold]{ans_l}[/bold]\n[dim]{shots} LLM-picked examples[/dim]",
                             title="LLM-Assisted", border_style="green"))
     else:
@@ -401,6 +446,215 @@ def _cmd_demo(*, slm, llm_provider, llm_model, api_key, shots=3, seed=42):
     console.print()
     from rich.columns import Columns
     console.print(Columns(panels, equal=True, expand=True))
+    console.print()
+
+
+@app.command()
+def showcase(
+    slm: str = typer.Option("HuggingFaceTB/SmolLM2-360M-Instruct", help="HuggingFace SLM model ID"),
+    benchmark: str = typer.Option("boolq", help="Benchmark: boolq, sst2, agnews"),
+    llm_provider: str = typer.Option("openai", help="LLM provider: openai, anthropic"),
+    llm_model: str = typer.Option("gpt-4o-mini", help="LLM model name"),
+    api_key: str = typer.Option("", envvar=["OPENAI_API_KEY", "ANTHROPIC_API_KEY"], help="LLM API key"),
+    n_questions: int = typer.Option(30, help="Questions to evaluate (more = better highlights)"),
+    shots: int = typer.Option(3, help="Few-shot examples per question"),
+    seed: int = typer.Option(42, help="Random seed"),
+):
+    """Showcase: run a batch and present the best highlight-reel moments."""
+    _cmd_showcase(slm=slm, benchmark=benchmark, llm_provider=llm_provider,
+                  llm_model=llm_model, api_key=api_key, n_questions=n_questions,
+                  shots=shots, seed=seed)
+
+
+def _cmd_showcase(*, slm, benchmark="boolq", llm_provider, llm_model, api_key,
+                  n_questions=30, shots=3, seed=42):
+    _banner()
+
+    if not api_key:
+        console.print("[red]Showcase requires an API key for the LLM selector.[/red]")
+        raise typer.Exit(1)
+
+    from tasks import load_task
+    from slm import load_model, generate_answer_generic
+    from selector import RandomSelector, GenericLLMSelector
+    from pricing import get_model_price
+
+    console.print(Panel(
+        f"[bold]SLM:[/bold] {_short(slm)}  |  [bold]LLM:[/bold] {llm_model}  |  "
+        f"[bold]Benchmark:[/bold] {benchmark}\n"
+        f"[bold]Questions:[/bold] {n_questions}  |  [bold]Shots:[/bold] {shots}  |  "
+        f"[bold]Seed:[/bold] {seed}",
+        title="Showcase Configuration", border_style="cyan",
+    ))
+
+    # Load everything
+    with console.status("[bold green]Loading benchmark dataset..."):
+        task = load_task(benchmark, n_train=50, n_test=n_questions, seed=seed)
+    console.print(f"  {task.name}: {len(task.train_pool)} train, {len(task.test_set)} test")
+
+    with console.status(f"[bold green]Loading {_short(slm)}..."):
+        model, tokenizer, device = load_model(slm)
+    console.print(f"  Model loaded on {device}\n")
+
+    llm_sel = GenericLLMSelector(
+        llm_provider, llm_model, api_key,
+        task_instruction=task.instruction, task_choices=task.choices,
+        cache_dir=CACHE_DIR / "selector",
+    )
+    random_sel = RandomSelector()
+
+    # Evaluate all questions, track per-question results
+    question_results = []
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        console=console,
+    ) as progress:
+        ptask = progress.add_task("Running showcase evaluation...", total=len(task.test_set))
+
+        for i, test_ex in enumerate(task.test_set):
+            qr = {"example": test_ex, "shots_used": None}
+
+            # Zero-shot
+            ans_zs, raw_zs, _ = generate_answer_generic(
+                model, tokenizer, device,
+                task.instruction, task.choices,
+                test_ex.input_text, test_ex.context, [],
+            )
+            qr["zs"] = (ans_zs, raw_zs, ans_zs == test_ex.correct)
+
+            # Random
+            r_shots = random_sel.select(task.train_pool, test_ex, shots, seed=seed + i)
+            ans_r, raw_r, _ = generate_answer_generic(
+                model, tokenizer, device,
+                task.instruction, task.choices,
+                test_ex.input_text, test_ex.context, r_shots,
+            )
+            qr["rand"] = (ans_r, raw_r, ans_r == test_ex.correct)
+
+            # LLM-Assisted
+            l_shots = llm_sel.select(task.train_pool, test_ex, shots, seed=seed + i)
+            ans_l, raw_l, _ = generate_answer_generic(
+                model, tokenizer, device,
+                task.instruction, task.choices,
+                test_ex.input_text, test_ex.context, l_shots,
+            )
+            qr["llm"] = (ans_l, raw_l, ans_l == test_ex.correct)
+            qr["shots_used"] = l_shots
+
+            question_results.append(qr)
+            progress.update(ptask, advance=1)
+
+    # ── Find highlights: LLM-Assisted correct, others wrong ──────────────
+    highlights = [
+        qr for qr in question_results
+        if qr["llm"][2] and (not qr["zs"][2] or not qr["rand"][2])
+    ]
+    # Sort: prefer cases where BOTH zero-shot AND random failed
+    highlights.sort(key=lambda qr: (not qr["zs"][2]) + (not qr["rand"][2]), reverse=True)
+    highlights = highlights[:4]  # Show up to 4
+
+    console.print()
+
+    if highlights:
+        console.print(Panel(
+            "[bold]These questions stumped the small model — until the LLM picked the right examples.[/bold]",
+            title="The David vs Goliath Effect",
+            border_style="bold cyan",
+        ))
+
+        for idx, qr in enumerate(highlights, 1):
+            ex = qr["example"]
+            zs_ans, _, zs_ok = qr["zs"]
+            r_ans, _, r_ok = qr["rand"]
+            l_ans, _, l_ok = qr["llm"]
+
+            zs_mark = "[green]Correct[/green]" if zs_ok else "[red]Wrong[/red]"
+            r_mark = "[green]Correct[/green]" if r_ok else "[red]Wrong[/red]"
+            l_mark = "[bold green]Correct[/bold green]"
+
+            # Build the highlight panel
+            lines = []
+            lines.append(f"[bold]Q:[/bold] {ex.input_text}")
+            if ex.context:
+                ctx_preview = ex.context[:150] + ("..." if len(ex.context) > 150 else "")
+                lines.append(f"[dim]{ctx_preview}[/dim]")
+            lines.append(f"[bold]Answer:[/bold] {ex.correct}")
+            lines.append("")
+            lines.append(f"  Zero-Shot:    {zs_ans:>10}  {zs_mark}")
+            lines.append(f"  Random:       {r_ans:>10}  {r_mark}")
+            lines.append(f"  LLM-Assisted: {l_ans:>10}  {l_mark}")
+
+            # Show what examples the LLM picked
+            if qr["shots_used"]:
+                lines.append("")
+                lines.append("[bold]Examples the LLM chose:[/bold]")
+                for j, shot in enumerate(qr["shots_used"], 1):
+                    shot_text = shot.input_text[:70] + ("..." if len(shot.input_text) > 70 else "")
+                    lines.append(f"  {j}. \"{shot_text}\" -> [bold]{shot.correct}[/bold]")
+
+            console.print(Panel(
+                "\n".join(lines),
+                title=f"Highlight {idx}",
+                border_style="green",
+            ))
+    else:
+        console.print("[yellow]No clear highlights found where LLM-Assisted uniquely won. "
+                      "Try with more questions (--n-questions 50).[/yellow]")
+
+    # ── Aggregate results ────────────────────────────────────────────────
+    n = len(question_results)
+    zs_acc = sum(1 for qr in question_results if qr["zs"][2]) / n
+    r_acc = sum(1 for qr in question_results if qr["rand"][2]) / n
+    l_acc = sum(1 for qr in question_results if qr["llm"][2]) / n
+    boost = l_acc - zs_acc
+
+    summary_table = Table(box=box.ROUNDED, border_style="cyan", title=f"\nResults — {n} questions")
+    summary_table.add_column("Strategy", style="bold")
+    summary_table.add_column("Accuracy", justify="right")
+    summary_table.add_column("Correct", justify="right")
+
+    for label, acc, ok_count in [
+        ("Zero-Shot", zs_acc, sum(1 for qr in question_results if qr["zs"][2])),
+        ("Random Few-Shot", r_acc, sum(1 for qr in question_results if qr["rand"][2])),
+        ("LLM-Assisted", l_acc, sum(1 for qr in question_results if qr["llm"][2])),
+    ]:
+        color = "green" if acc == max(zs_acc, r_acc, l_acc) else "white"
+        summary_table.add_row(label, f"[{color}]{acc:.1%}[/{color}]", f"{ok_count}/{n}")
+    console.print(summary_table)
+
+    # ── Cost breakdown ───────────────────────────────────────────────────
+    selector_price = get_model_price(llm_model)
+    total_selector_cost = (
+        llm_sel.total_input_tokens * selector_price["input"] / 1e6
+        + llm_sel.total_output_tokens * selector_price["output"] / 1e6
+    )
+    cost_per_q = total_selector_cost / max(n, 1)
+
+    # What would pure LLM cost for the same questions?
+    direct_price = get_model_price("gpt-4o")
+    direct_cost = n * (350 * direct_price["input"] / 1e6 + 20 * direct_price["output"] / 1e6)
+
+    console.print(Panel(
+        f"[bold]LLM selector cost:[/bold] ${total_selector_cost:.4f} "
+        f"(${cost_per_q:.5f}/question)\n"
+        f"[bold]Pure GPT-4o equivalent:[/bold] ${direct_cost:.4f} "
+        f"(${direct_cost/max(n,1):.5f}/question)\n"
+        f"[bold]Cost reduction:[/bold] [green]{(1 - total_selector_cost/max(direct_cost, 0.0001))*100:.0f}%[/green]\n\n"
+        f"[bold]Accuracy boost:[/bold] [green]+{boost*100:.1f} percentage points[/green] over zero-shot\n"
+        f"[bold]Highlights:[/bold] {len(highlights)} questions where LLM-Assisted uniquely won\n\n"
+        f"[dim]{llm_sel.total_input_tokens:,} input + {llm_sel.total_output_tokens:,} output tokens used[/dim]",
+        title="The Bottom Line",
+        border_style="bold yellow",
+    ))
+
+    # Persist results
+    accuracies = {"Zero-Shot": zs_acc, "Random": r_acc, "LLM-Assisted": l_acc}
+    _save_run_results(benchmark, slm, llm_model, accuracies, n, seed)
+
     console.print()
 
 
@@ -530,14 +784,13 @@ def _cmd_distill(*, slm, benchmark, llm_provider, llm_model, api_key,
     console.print(f"  {task.name}: {len(task.train_pool)} train, {len(task.test_set)} test\n")
 
     console.print("[bold magenta]Phase 2[/bold magenta] — Teacher rationale generation")
-    total_examples = len(task.train_pool) + len(task.test_set)
 
     with Progress(
         SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
         BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         console=console,
     ) as progress:
-        ptask = progress.add_task("Generating rationales...", total=total_examples)
+        ptask = progress.add_task("Generating rationales...", total=len(task.train_pool))
 
         def _rat_cb(i, _t):
             progress.update(ptask, completed=i)
@@ -578,6 +831,7 @@ def _cmd_distill(*, slm, benchmark, llm_provider, llm_model, api_key,
     console.print(f"  Baseline accuracy: [bold]{baseline['accuracy']:.1%}[/bold] "
                   f"({baseline['n_correct']}/{baseline['n_total']})\n")
 
+    # Free the original model — fine_tune_student loads a fresh copy
     del model_orig, tok_orig
     import gc; gc.collect()
 
@@ -586,14 +840,20 @@ def _cmd_distill(*, slm, benchmark, llm_provider, llm_model, api_key,
 
     train_annotated = annotated[:n_train]
 
-    with console.status("[bold green]Tokenizing dataset..."):
+    # Use the tokenizer from fine_tune_student's model load to avoid an extra load
+    with console.status("[bold green]Preparing dataset & loading model..."):
+        # Load model once — reuse tokenizer for dataset
         from slm import load_model as _lm
-        _, tok_tmp, _ = _lm(slm)
+        _ft_model, _ft_tok, _ft_dev = _lm(slm)
         dataset = DistillDataset(
             train_annotated, task.instruction, task.choices,
-            tok_tmp, max_len=512, lambda_weight=lambda_weight, seed=seed,
+            _ft_tok, max_len=512, lambda_weight=lambda_weight, seed=seed,
         )
     console.print(f"  Dataset: {len(dataset)} examples\n")
+
+    # Free — fine_tune_student will load its own copy for LoRA wrapping
+    del _ft_model, _ft_tok
+    gc.collect()
 
     with Progress(
         SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
@@ -651,10 +911,10 @@ def _cmd_distill(*, slm, benchmark, llm_provider, llm_model, api_key,
     console.print(Panel(
         f"[bold]Multi-task loss:[/bold] L = {lambda_weight} * L_label + "
         f"{1-lambda_weight:.2f} * L_rationale\n"
-        f"[bold]Method:[/bold] Dataset mixing (equivalent to explicit loss weighting in expectation)\n"
+        f"[bold]Method:[/bold] Deterministic stratified dataset mixing\n"
         f"[bold]Adaptation:[/bold] LoRA (rank {8}, alpha {16}) — ~1-3% of parameters trainable\n"
-        f"[bold]Teacher:[/bold] {llm_model} → rationales + labels\n"
-        f"[bold]Student:[/bold] {_short(slm)} → trained to predict labels AND generate rationales",
+        f"[bold]Teacher:[/bold] {llm_model} -> rationales + labels\n"
+        f"[bold]Student:[/bold] {_short(slm)} -> trained to predict labels AND generate rationales",
         title="Loss Function Details", border_style="dim",
     ))
     console.print()
@@ -702,6 +962,12 @@ def _cmd_results():
     console.print(table)
     console.print(f"\n[dim]{len(df)} configurations across "
                   f"{df['seed'].nunique()} seeds.[/dim]\n")
+
+    # Also show run history if available
+    history_path = RESULTS_DIR / "run_history.csv"
+    if history_path.exists():
+        hdf = pd.read_csv(history_path)
+        console.print(f"[dim]+ {len(hdf)} rows in run history ({history_path})[/dim]\n")
 
 
 if __name__ == "__main__":

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "david-vs-goliath"
-version = "0.2.0"
-description = "When tiny models outsmart the giants — intelligent few-shot selection and knowledge distillation"
+version = "0.3.0"
+description = "Cut your LLM API bill by up to 90% — intelligent few-shot selection and knowledge distillation"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -33,8 +33,11 @@ llm = [
     "anthropic>=0.25.0",
     "openai>=1.30.0",
 ]
+dev = [
+    "pytest>=8.0",
+]
 all = [
-    "david-vs-goliath[web,inference,llm]",
+    "david-vs-goliath[web,inference,llm,dev]",
 ]
 
 [project.scripts]
@@ -42,3 +45,6 @@ dvg = "cli:app"
 
 [tool.setuptools]
 py-modules = ["cli", "tasks", "pricing", "slm", "selector", "benchmark", "distill"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
